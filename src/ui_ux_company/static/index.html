@@ -164,6 +164,7 @@
             <span><i class="dot idle"></i> Idle</span>
             <span><i class="dot running"></i> Running</span>
             <span><i class="dot completed"></i> Completed</span>
+            <span><i class="dot stopped"></i> Stopped</span>
             <span><i class="dot failed"></i> Error</span>
             <span><i class="dot waiting"></i> Waiting for you</span>
             <span><i class="dot disabled"></i> On-demand</span>
@@ -188,13 +189,21 @@
 
     <!-- APPROVALS -->
     <section id="tab-approvals" class="tab-panel">
-      <div class="card">
-        <div class="card-head"><h2>Pending decisions</h2><span class="tag" id="pending-approvals-count">0</span></div>
-        <div id="approvals-pending" class="approval-grid"></div>
+      <div class="subtabs" id="approval-subtabs">
+        <button class="subtab active" data-approval-subtab="pending">Pending <span class="count" id="pending-approvals-count">0</span></button>
+        <button class="subtab" data-approval-subtab="history">Decision history <span class="count" id="history-approvals-count">0</span></button>
       </div>
-      <div class="card">
-        <div class="card-head"><h2>Decision history</h2></div>
-        <div id="approvals-history" class="list scroll tall"></div>
+      <div id="approvals-pane-pending" class="subpane active">
+        <div class="card">
+          <div class="card-head"><h2>Pending decisions</h2><span class="tag" id="pending-approvals-tag">0</span></div>
+          <div id="approvals-pending" class="approval-grid"></div>
+        </div>
+      </div>
+      <div id="approvals-pane-history" class="subpane">
+        <div class="card">
+          <div class="card-head"><h2>Decision history</h2><span class="tag" id="history-approvals-tag">0</span></div>
+          <div id="approvals-history" class="list scroll tall"></div>
+        </div>
       </div>
     </section>
 

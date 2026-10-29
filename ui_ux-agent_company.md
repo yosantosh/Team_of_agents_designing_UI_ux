@@ -768,8 +768,8 @@ A dependency-free SPA served by FastAPI:
 The SPA uses a narrow left icon rail (labels on hover) and tabs:
 
 - **Overview** — decree composer, recent runs, live timeline, compact org summary, quick approvals, token budget, quick artifacts, Target_ui mini-preview, evolution quick list.
-- **Live Flow** — full-page hierarchical graph with CEO/Chief/tier leads/specialists, codenames A1–A36, idle/running/completed/error/waiting icons, current work labels, thin colored signal lines, company feed, live SSE events, zoom controls, and click-through agent detail.
-- **Approvals** — source agent/codename, due time, overdue badge, approve/reject/dictate, decision history.
+- **Live Flow** — full-page hierarchical graph with CEO/Chief/tier leads/specialists, codenames A1–A36, idle/running/completed/stopped/error/waiting icons, current work labels, thin colored signal lines, company feed, live SSE events, zoom controls, and click-through agent detail. Terminal run states clamp every running node to completed/stopped/failed so no stale “running” indicator survives a stop.
+- **Approvals** — sub-tabs for Pending and Decision history; source agent/codename, due time, overdue badge, approve/reject/dictate. Approvals attached to terminal runs are auto-dismissed into history at startup.
 - **Artifacts** — run selector, artifact list, JSON/text/image preview, screenshot upload, and Re-run QA (reuses the existing run; no design rerun).
 - **Contract** — versioned design-contract editor with Save version and Re-run critique.
 - **Target_ui** — target + current-UI browse, recursive folder search, scan, scan + vision analysis, image grid, confidence, conflicts, and rectangle annotation editor.

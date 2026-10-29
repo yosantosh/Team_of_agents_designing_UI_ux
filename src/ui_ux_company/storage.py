@@ -348,6 +348,35 @@ class Storage:
             row.pop("decision_json", None)
         return rows
 
+    def dismiss_stale_approvals(self) -> int:
+        """Close approvals whose run/proposal is already terminal so they cannot pollute the inbox."""
+        pending = self.list_approvals("pending", 1000)
+        dismissed = 0
+        terminal_runs = {"completed", "failed", "stopped", "escalated"}
+        for approval in pending:
+            run_id = approval.get("run_id")
+            if not run_id:
+                continue
+            if approval.get("gate") == "evolution_approval":
+                proposal = self.get_evolution(run_id)
+                if proposal and proposal.get("status") not in {"pending_approval", "evaluating", "canary"}:
+                    self.decide_approval(
+                        approval["approval_id"],
+                        {"decision": "dismiss", "notes": "Proposal was already terminal."},
+                        status="dismissed",
+                    )
+                    dismissed += 1
+                continue
+            run = self.get_run(run_id)
+            if run and run.get("status") in terminal_runs:
+                self.decide_approval(
+                    approval["approval_id"],
+                    {"decision": "dismiss", "notes": "Run was already terminal."},
+                    status="dismissed",
+                )
+                dismissed += 1
+        return dismissed
+
     def decide_approval(self, approval_id: str, decision: dict[str, Any], status: str | None = None) -> None:
         final_status = status or ("approved" if decision.get("decision") in {"approve", "override"} else "rejected")
         self._execute(

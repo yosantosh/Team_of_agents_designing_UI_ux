@@ -164,6 +164,7 @@ input[type="checkbox"] { accent-color: var(--purple); }
 .badge.fail, .badge.failed, .badge.escalated, .badge.stopped { color: var(--red); border-color: rgba(255,59,48,.3); }
 .badge.pending, .badge.awaiting_approval, .badge.pending_approval, .badge.running { color: var(--amber); border-color: rgba(245,158,11,.3); }
 .badge.proposed { color: var(--purple); border-color: rgba(168,85,247,.3); }
+.badge.dismissed { color: var(--meta); border-color: var(--border); }
 
 .live-card { min-height: 280px; }
 .run-meta { font-size: 11px; color: var(--muted); margin-bottom: 9px; line-height: 1.55; }
@@ -206,6 +207,13 @@ input[type="checkbox"] { accent-color: var(--purple); }
 .laws li { margin-bottom: 4px; }
 
 /* Approvals */
+.subtabs { display: flex; gap: 5px; margin-bottom: var(--gap); }
+.subtab { border: 1px solid var(--border); background: rgba(255,255,255,.02); color: var(--muted); border-radius: 999px; padding: 8px 12px; font-size: 11.5px; }
+.subtab:hover { color: var(--text); }
+.subtab.active { color: var(--text); border-color: rgba(168,85,247,.4); background: rgba(168,85,247,.10); }
+.subtab .count { margin-left: 5px; }
+.subpane { display: none; }
+.subpane.active { display: block; }
 .approval-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
 .approval-card { border: 1px solid var(--border); border-radius: 14px; padding: 12px; background: rgba(255,255,255,.02); }
 .approval-card .title { font-size: 12px; line-height: 1.45; }
@@ -238,6 +246,7 @@ input[type="checkbox"] { accent-color: var(--purple); }
 .dot.idle { background: #3a3a3e; }
 .dot.running { background: var(--purple); box-shadow: 0 0 9px var(--purple); animation: pulse 1s infinite; }
 .dot.completed { background: var(--green); }
+.dot.stopped { background: #8e8e93; }
 .dot.failed { background: var(--red); }
 .dot.waiting { background: var(--amber); }
 .dot.disabled { background: #2a2a2e; }
@@ -266,6 +275,8 @@ input[type="checkbox"] { accent-color: var(--purple); }
 .flow-node.status-completed { border-color: rgba(34,197,94,.42); }
 .flow-node.status-completed .node-icon { color: var(--green); }
 .flow-node.status-failed { border-color: rgba(255,59,48,.55); background: rgba(255,59,48,.06); }
+.flow-node.status-stopped { border-color: rgba(142,142,147,.35); opacity: .78; }
+.flow-node.status-stopped .node-icon { color: var(--muted); }
 .flow-node.status-failed .node-icon { color: var(--red); }
 .flow-node.status-waiting { border-color: rgba(245,158,11,.55); }
 .flow-node.status-waiting .node-icon { color: var(--amber); }

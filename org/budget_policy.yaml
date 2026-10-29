@@ -1,6 +1,6 @@
 # Token budget policy — the Dictator's monthly model budget.
 
-monthly_total_tokens: 100000000          # PLACEHOLDER: replace with the real ceiling
+monthly_total_tokens: 300000000          # PLACEHOLDER: replace with the real ceiling
 currency: "USD"
 counting:
   count_input: true

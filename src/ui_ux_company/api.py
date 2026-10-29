@@ -94,6 +94,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if settings.model_override:
         settings.opencode_model = settings.model_override
     storage = Storage(settings.storage_db)
+    storage.dismiss_stale_approvals()
     bus = EventBus(storage, Notifier(settings))
     artifacts = ArtifactStore(settings, storage)
     gateway = ModelGateway(settings, registry, storage)
@@ -849,13 +850,47 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if approval["status"] != "pending":
             raise HTTPException(status_code=409, detail="approval already decided")
         payload = decision.model_dump()
-        if approval["gate"] == "evolution_approval":
-            _spawn(evolution.resume(approval["run_id"], payload))
-        elif approval.get("run_id"):
-            _spawn(company.resume(approval["run_id"], payload))
-        else:
-            raise HTTPException(status_code=409, detail="approval has no run")
-        return {"status": "resumed", "approval_id": approval_id, "decision": payload}
+        gate = str(approval.get("gate"))
+        run_id = approval.get("run_id")
+
+        async def finalize_locally(reason: str):
+            storage.decide_approval(approval_id, payload)
+            if run_id:
+                await bus.publish(
+                    run_id,
+                    "approval.decided",
+                    f"{gate} decided locally: {payload.get('decision')}",
+                    "dictator",
+                    {"approval_id": approval_id, "decision": payload, "reason": reason},
+                )
+            return {"status": "decided", "approval_id": approval_id, "decision": payload, "reason": reason}
+
+        # An escalation approval is created after the run has already stopped. There is
+        # no graph interrupt to resume; the decision itself is the durable outcome.
+        if gate == "dictator_escalation":
+            return await finalize_locally("escalation run is already terminal")
+
+        if not run_id:
+            return await finalize_locally("approval has no resumable run")
+
+        if gate == "evolution_approval":
+            proposal = storage.get_evolution(run_id)
+            if not proposal or proposal.get("status") not in {"pending_approval", "evaluating", "canary"}:
+                return await finalize_locally("evolution is not waiting for approval")
+            _spawn(evolution.resume(run_id, payload))
+            return {"status": "resumed", "approval_id": approval_id, "decision": payload}
+
+        if gate == "human_design_approval":
+            run = storage.get_run(run_id)
+            if not run or run.get("status") not in {"awaiting_approval", "awaiting_design_approval"}:
+                return await finalize_locally("run is not waiting for design approval")
+            _spawn(company.resume(run_id, payload))
+            return {"status": "resumed", "approval_id": approval_id, "decision": payload}
+
+        if run_id:
+            _spawn(company.resume(run_id, payload))
+            return {"status": "resumed", "approval_id": approval_id, "decision": payload}
+        return await finalize_locally("approval has no resumable run")
 
     # -------------------------------------------------------------- evolution
     @app.post("/api/evolve")

@@ -24,6 +24,7 @@ const state = {
   contractVersions: [],
   contractCritique: null,
   lastPendingIds: null,
+  approvalSubtab: "pending",
   agentStatus: {},
   flowRunId: null,
   artifactRunId: null,
@@ -111,6 +112,7 @@ function agentLabel(agentId) {
 }
 
 function currentWork(agentId) {
+  if (!state.run) return "";
   const events = (state.events || []).filter((event) => event.agent_id === agentId && event.type === "agent.started");
   const last = events[events.length - 1];
   return last?.data?.work_label || agentById(agentId)?.work_label || "";
@@ -494,17 +496,36 @@ function deriveAgentStatus() {
     if (event.type === "agent.failed") statuses[event.agent_id] = "failed";
     if (event.type === "approval.required") statuses.dictator = "waiting";
   }
-  if (state.run?.status === "awaiting_approval" || state.run?.status === "escalated") statuses.dictator = "waiting";
-  if (state.run?.status === "completed") {
+  const runStatus = state.run?.status;
+  if (runStatus === "awaiting_approval" || runStatus === "awaiting_design_approval") {
+    for (const [id, status] of Object.entries(statuses)) {
+      if (status === "running") statuses[id] = "waiting";
+    }
+    statuses.dictator = "waiting";
+  }
+  if (runStatus === "completed") {
     for (const [id, status] of Object.entries(statuses)) {
       if (status === "running") statuses[id] = "completed";
     }
     statuses.dictator = "completed";
   }
-  if (state.run?.status === "failed") {
+  if (runStatus === "failed") {
     for (const [id, status] of Object.entries(statuses)) {
       if (status === "running") statuses[id] = "failed";
     }
+    statuses.dictator = "failed";
+  }
+  if (runStatus === "stopped" || runStatus === "cancelled") {
+    for (const [id, status] of Object.entries(statuses)) {
+      if (status === "running") statuses[id] = "stopped";
+    }
+    statuses.dictator = "stopped";
+  }
+  if (runStatus === "escalated") {
+    for (const [id, status] of Object.entries(statuses)) {
+      if (status === "running") statuses[id] = "stopped";
+    }
+    statuses.dictator = "waiting";
   }
   state.agentStatus = statuses;
 }
@@ -531,7 +552,7 @@ function handleRunEvent(event) {
     if (event.type === "agent.failed") state.agentStatus[event.agent_id] = "failed";
   }
   if (event.type === "approval.required") state.agentStatus.dictator = "waiting";
-  if (["run.completed", "run.paused", "run.failed", "run.started", "run.resumed"].includes(event.type)) {
+  if (["run.completed", "run.paused", "run.failed", "run.started", "run.resumed", "run.stopped", "run.rechecked"].includes(event.type)) {
     if (state.runId) loadRun(state.runId, false);
     poll();
   }
@@ -541,7 +562,7 @@ function handleRunEvent(event) {
 }
 
 // ------------------------------------------------------------------ flow
-const FLOW_ICONS = { idle: "○", running: "◌", completed: "✓", failed: "✕", waiting: "⏸", disabled: "–" };
+const FLOW_ICONS = { idle: "○", running: "◌", completed: "✓", failed: "✕", waiting: "⏸", stopped: "■", disabled: "–" };
 
 function renderFlow() {
   const registry = state.registry?.registry;
@@ -554,8 +575,13 @@ function renderFlow() {
     (tiers[tier] ||= []).push(agent);
   });
   const tierMeta = Object.fromEntries((registry.tiers || []).map((t) => [Number(t.id), t.name]));
+  const statusFor = (agentId) => {
+    const agent = agentById(agentId);
+    if (!state.run) return agent?.enabled === false ? "disabled" : "idle";
+    return state.agentStatus[agentId] || (agent?.enabled === false ? "disabled" : "idle");
+  };
   const nodeHtml = (agent, extraClass = "") => {
-    const status = state.agentStatus[agent.id] || (agent.enabled ? "idle" : "disabled");
+    const status = statusFor(agent.id);
     const work = currentWork(agent.id);
     return `
       <div class="flow-node ${extraClass} status-${status}" data-node-id="${escapeHtml(agent.id)}" title="${escapeHtml(agent.mission || "")}">
@@ -568,18 +594,18 @@ function renderFlow() {
   };
   const top = `
     <div class="flow-top">
-      <div class="flow-node human status-${state.agentStatus.dictator || "idle"}" data-node-id="dictator">
-        <span class="node-icon">${FLOW_ICONS[state.agentStatus.dictator || "idle"]}</span>
+      <div class="flow-node human status-${statusFor("dictator")}" data-node-id="dictator">
+        <span class="node-icon">${FLOW_ICONS[statusFor("dictator")]}</span>
         <div class="node-title">Dictator</div>
         <div class="node-sub">Human Product Owner</div>
       </div>
-      <div class="flow-node orchestrator status-${state.agentStatus.ceo || "idle"}" data-node-id="ceo">
-        <span class="node-icon">${FLOW_ICONS[state.agentStatus.ceo || "idle"]}</span>
+      <div class="flow-node orchestrator status-${statusFor("ceo")}" data-node-id="ceo">
+        <span class="node-icon">${FLOW_ICONS[statusFor("ceo")]}</span>
         <div class="node-title">${escapeHtml(agentById("ceo")?.codename || "A1")} · CEO</div>
         <div class="node-sub">Company operating system</div>
       </div>
-      <div class="flow-node orchestrator status-${state.agentStatus.chief_orchestrator || "idle"}" data-node-id="chief_orchestrator">
-        <span class="node-icon">${FLOW_ICONS[state.agentStatus.chief_orchestrator || "idle"]}</span>
+      <div class="flow-node orchestrator status-${statusFor("chief_orchestrator")}" data-node-id="chief_orchestrator">
+        <span class="node-icon">${FLOW_ICONS[statusFor("chief_orchestrator")]}</span>
         <div class="node-title">${escapeHtml(agentById("chief_orchestrator")?.codename || "A2")} · Chief UI/UX Orchestrator</div>
         <div class="node-sub">Tier 0 · routing · budgets</div>
       </div>
@@ -789,6 +815,7 @@ function renderApprovals() {
   const visible = (approval) => approval.gate === "evolution_approval" || !approval.run_id || productionRunIds.has(approval.run_id);
   const pending = (state.approvals || []).filter(visible);
   const all = (state.allApprovals || []).filter(visible);
+  const historyAll = all.filter((approval) => approval.status !== "pending");
   const currentIds = new Set(pending.map((approval) => approval.approval_id));
   if (state.lastPendingIds && "Notification" in window && Notification.permission === "granted") {
     for (const approval of pending) {
@@ -801,6 +828,9 @@ function renderApprovals() {
   $("approval-count").textContent = String(pending.length);
   $("approval-badge").textContent = String(pending.length);
   $("pending-approvals-count").textContent = String(pending.length);
+  $("pending-approvals-tag").textContent = String(pending.length);
+  $("history-approvals-count").textContent = String(historyAll.length);
+  $("history-approvals-tag").textContent = String(historyAll.length);
   const quick = $("approvals-quick");
   const pendingEl = $("approvals-pending");
   const historyEl = $("approvals-history");
@@ -811,7 +841,7 @@ function renderApprovals() {
     quick.innerHTML = pending.slice(0, 4).map((a) => approvalCard(a, true)).join("");
     pendingEl.innerHTML = pending.map((a) => approvalCard(a, false)).join("");
   }
-  const history = all.filter((a) => a.status !== "pending").slice(0, 80);
+  const history = historyAll.slice(0, 80);
   historyEl.innerHTML = history.length ? history.map((a) => `
     <div class="item">
       <div class="title">${escapeHtml(a.title)}</div>
@@ -832,6 +862,15 @@ function renderApprovals() {
   });
 }
 
+function switchApprovalSubtab(name) {
+  state.approvalSubtab = name;
+  document.querySelectorAll("[data-approval-subtab]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.approvalSubtab === name);
+  });
+  $("approvals-pane-pending").classList.toggle("active", name === "pending");
+  $("approvals-pane-history").classList.toggle("active", name === "history");
+}
+
 async function decideApproval(approvalId, decision, notes = "") {
   try {
     await api(`/api/approvals/${encodeURIComponent(approvalId)}/decide`, {
@@ -840,6 +879,7 @@ async function decideApproval(approvalId, decision, notes = "") {
     });
     toast(`Decision recorded: ${decision}`);
     await poll();
+    if (!state.approvals.length) switchApprovalSubtab("history");
     if (state.runId) await loadRun(state.runId, false);
     if (state.evolutionId) await loadEvolution(state.evolutionId, false);
   } catch (error) {
@@ -1354,7 +1394,7 @@ function renderEvolution() {
   const events = state.evolutionEvents || [];
   const has = (type) => events.some((event) => event.type === type);
   const pending = Boolean(state.evolution?.pending) || (state.evolution?.state?.interrupts || []).length > 0 || (state.evolution?.state?.__interrupt__ || []).length > 0;
-  const terminal = ["applied", "rejected", "stopped"].includes(status);
+  const terminal = ["applied", "rejected", "stopped", "promoted", "canary_failed", "rolled_back"].includes(status);
   const stopped = ["stopped", "rejected"].includes(status);
   const auditorModel = events.find((event) => event.type === "agent.started" && event.agent_id === "org_evolution_auditor")?.data?.model;
   $("evolution-status").textContent = status;
@@ -1367,7 +1407,7 @@ function renderEvolution() {
       id: "observe",
       label: "Observe",
       name: "Org Observer",
-      status: has("evolution.observed") ? "completed" : (has("evolution.started") ? "running" : "idle"),
+      status: has("evolution.observed") ? "completed" : (stopped ? "stopped" : (has("evolution.started") ? "running" : "idle")),
       output: "Reads traces, rework, cost, gate failures, and budget pressure.",
     },
     {
@@ -1427,6 +1467,7 @@ function renderEvolution() {
     proposalEl.innerHTML = `
       <div class="card-head"><h2>${escapeHtml(evolutionTitle({ title: proposal.title, status }))}</h2><span class="badge ${statusClass(status)}">${escapeHtml(status)}</span></div>
       <p class="muted">${escapeHtml(proposal.problem || "Waiting for the auditor to produce a proposal.")}</p>
+      ${pending ? `<div class="proposal-block"><h3>Waiting for Dictator approval</h3><p>This is the human gate, not an error. Approve applies safe registry changes; Reject discards the proposal; Dictate approves with your written rationale. No change is applied until you decide.</p></div>` : ""}
       <div class="proposal-block">
         <h3>Changes</h3>
         <pre>${escapeHtml(JSON.stringify(proposal.changes || [], null, 2))}</pre>
@@ -1781,6 +1822,10 @@ function closeModal() {
 $("tabs").addEventListener("click", (event) => {
   const tab = event.target.closest(".tab");
   if (tab) switchTab(tab.dataset.tab);
+});
+$("approval-subtabs").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-approval-subtab]");
+  if (button) switchApprovalSubtab(button.dataset.approvalSubtab);
 });
 $("open-flow").addEventListener("click", () => switchTab("flow"));
 $("stop-run").addEventListener("click", () => stopRun(state.runId));

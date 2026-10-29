@@ -24,6 +24,13 @@ def test_purge_mock_data_keeps_real_runs(settings):
         assert approval["from_agent"] == "independent_design_critic"
         assert approval["due_at"]
 
+        stale = storage.create_approval("run_real", "dictator_escalation", "Stale")
+        run = storage.get_run("run_real")
+        assert run
+        storage.update_run("run_real", status="completed")
+        assert storage.dismiss_stale_approvals() >= 1
+        assert storage.get_approval(stale["approval_id"])["status"] == "dismissed"
+
         result = storage.purge_mock_data()
 
         assert result["runs"] == 1
