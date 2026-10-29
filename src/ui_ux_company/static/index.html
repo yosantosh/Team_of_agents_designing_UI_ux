@@ -30,6 +30,7 @@
     <button class="tab" data-tab="approvals" title="Approvals"><span class="rail-icon">✓</span><span class="rail-label">Approvals</span><span class="count" id="approval-badge">0</span></button>
     <button class="tab" data-tab="artifacts" title="Artifacts"><span class="rail-icon">▤</span><span class="rail-label">Artifacts</span></button>
     <button class="tab" data-tab="contract" title="Design contract"><span class="rail-icon">▦</span><span class="rail-label">Contract</span></button>
+    <button class="tab" data-tab="history" title="Global history"><span class="rail-icon">⟲</span><span class="rail-label">History</span></button>
     <button class="tab" data-tab="target" title="Target_ui"><span class="rail-icon">◉</span><span class="rail-label">Target_ui</span></button>
     <button class="tab" data-tab="evolution" title="Evolution"><span class="rail-icon">✦</span><span class="rail-label">Evolution</span></button>
     <button class="tab" data-tab="settings" title="Settings"><span class="rail-icon">⚙</span><span class="rail-label">Settings</span></button>
@@ -254,6 +255,22 @@
       </div>
     </section>
 
+    <!-- GLOBAL HISTORY -->
+    <section id="tab-history" class="tab-panel">
+      <div class="card">
+        <div class="card-head">
+          <h2>Global run history</h2>
+          <div class="subtabs" id="history-filters">
+            <button class="subtab active" data-history-filter="all">All</button>
+            <button class="subtab" data-history-filter="company">Company runs</button>
+            <button class="subtab" data-history-filter="evolution">Evolution</button>
+          </div>
+        </div>
+        <p class="hint">Every company run and evolution audit is saved here. Tap an entry to restore its flow, timeline, artifacts, contract, approvals, and outputs.</p>
+        <div id="history-list" class="list scroll tall"></div>
+      </div>
+    </section>
+
     <!-- TARGET UI -->
     <section id="tab-target" class="tab-panel">
       <div class="card">
@@ -287,6 +304,7 @@
         </div>
         <div class="row">
           <select id="evolution-select" class="wide-select" style="max-width:340px"></select>
+          <label class="checks" style="margin:0;font-size:10px"><input type="checkbox" id="evolution-auto" /> Auto-apply safe changes</label>
           <span class="status" id="evolution-status">idle</span>
           <button class="btn primary small" id="evolution-start">✦ Start audit</button>
           <button class="btn danger small" id="evolution-stop" disabled>■ Stop</button>

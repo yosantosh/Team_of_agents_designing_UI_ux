@@ -629,6 +629,10 @@ flowchart LR
 | Pod composition | Legal/compliance constraints |
 | Tool allowlist | Production secrets policy |
 
+### 8.5.0 Prompt and gate mutations
+
+`prompt_update` mutations are stored as `prompt_overrides` in the registry and loaded by the model gateway for that role. This makes an approved prompt change executable without editing Python. Rollback restores the previous registry version and removes the override. Structural changes still require a code/deploy change.
+
 ### 8.5.1 Metric canary and rollback
 
 After a safe registry change is applied, the Evolution tab can run a small-scope metric canary over recent production runs. It records completed/escalated/failed counts, pass rate, scope, and verdict. A pass promotes the change; a fail exposes rollback. This is a metric heuristic, not a full LangSmith golden-task shadow eval.
@@ -772,8 +776,9 @@ The SPA uses a narrow left icon rail (labels on hover) and tabs:
 - **Approvals** — sub-tabs for Pending and Decision history; source agent/codename, due time, overdue badge, approve/reject/dictate. Approvals attached to terminal runs are auto-dismissed into history at startup.
 - **Artifacts** — run selector, artifact list, JSON/text/image preview, screenshot upload, and Re-run QA (reuses the existing run; no design rerun).
 - **Contract** — versioned design-contract editor with Save version and Re-run critique.
+- **History** — global combined history of company runs and evolution audits; tapping an entry restores its flow, timeline, artifacts, contract, and outputs. When no company run or evolution audit is active, all live run/evolution panels clear; the entries remain in History.
 - **Target_ui** — target + current-UI browse, recursive folder search, scan, scan + vision analysis, image grid, confidence, conflicts, and rectangle annotation editor.
-- **Evolution** — start/stop audit, live Observe → Diagnose → Evaluate → Approve → Apply → Canary cards, agent output modals, proposal detail, Approve / Reject / Dictate, metric canary, promote, and registry rollback.
+- **Evolution** — start/stop audit, live Observe → Diagnose → Evaluate → Approve → Apply → Canary cards, agent output modals, proposal detail, Approve / Reject / Dictate, metric canary, promote, registry rollback, and an explicit **Auto-apply safe changes** pre-approval option.
 - **Settings** — active project switcher, project/current UI/Target_ui browse + Gradle/Manifest/Compose/token validation, searchable OpenCode model picker + model test, editable monthly token budget, autonomy level, webhook/browser notifications, token RBAC session, audit log, runtime info, and mock/demo data purge.
 
 Production defaults:
@@ -815,6 +820,7 @@ Replace the SPA with Next.js + React Flow when multi-user/RBAC is needed. Keep t
 - `POST /api/models/test`
 - `POST /api/runs`
 - `GET /api/runs`
+- `GET /api/history`
 - `GET /api/runs/{run_id}`
 - `GET /api/runs/{run_id}/messages`
 - `GET /api/runs/{run_id}/events` (SSE)

@@ -27,6 +27,9 @@ def test_api_health_and_registry(settings):
         assert fs.json()["path"]
         approvals = client.get("/api/approvals", params={"status": "all"})
         assert approvals.status_code == 200
+        history = client.get("/api/history")
+        assert history.status_code == 200
+        assert "history" in history.json()
         current = client.get("/api/current-ui")
         assert current.status_code == 200
         assert "images" in current.json()

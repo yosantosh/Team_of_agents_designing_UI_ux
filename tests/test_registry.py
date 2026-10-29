@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ui_ux_company.config import PROJECT_ROOT, Settings
-from ui_ux_company.registry import list_projects, load_budget, load_profile, load_registry
+from ui_ux_company.registry import Registry, list_projects, load_budget, load_profile, load_registry, load_yaml, save_yaml
 
 
 def test_registry_loads_and_validates(settings):
@@ -25,6 +25,22 @@ def test_profile_and_budget(settings):
     assert profile.visual_qa["roborazzi"] is False
     assert profile.target_ui["precedence"] == "tiered"
     assert budget.monthly_total_tokens >= 1_000_000
+
+
+def test_prompt_update_apply_and_rollback(settings, tmp_path):
+    data = load_yaml(settings.registry_path)
+    path = tmp_path / "registry.yaml"
+    save_yaml(path, data)
+    registry = Registry(data, path)
+    result = registry.apply_safe_changes(
+        [{"type": "prompt_update", "target": "independent_design_critic", "to": "v2 bounded critic"}],
+        "evo_test",
+    )
+    assert result["applied"]
+    assert registry.data["prompt_overrides"]["independent_design_critic"] == "v2 bounded critic"
+    rolled = registry.rollback("evo_test")
+    assert rolled["proposal_id"] == "evo_test"
+    assert "prompt_overrides" not in registry.data
 
 
 def test_project_catalog(settings):

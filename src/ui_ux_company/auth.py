@@ -84,7 +84,7 @@ class AuthService:
             return user.role == "dictator"
         if path.startswith("/api/settings") or path.startswith("/api/projects/") and path.endswith("/activate"):
             return user.role == "dictator"
-        if path.endswith("/decide") or path.endswith("/approve") or path.startswith("/api/evolve/"):
+        if path.endswith("/decide") or path.endswith("/approve") or path == "/api/evolve" or path.startswith("/api/evolve/"):
             return user.role == "dictator"
         if path.startswith("/api/approvals/") or path.startswith("/api/audit"):
             return user.role in {"dictator", "design_lead"}

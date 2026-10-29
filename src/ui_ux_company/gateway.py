@@ -110,7 +110,15 @@ class ModelGateway:
             context,
             max_chars=self.settings.max_context_chars,
         )
-        full_prompt = system_prompt(prompt_key) + "\n\n" + prompt
+        overrides = self.registry.data.get("prompt_overrides", {})
+        override = overrides.get(str(role)) or overrides.get(str(prompt_key))
+        base_prompt = str(override) if override else system_prompt(prompt_key)
+        full_prompt = (
+            base_prompt
+            + "\n\nOutput contract: return exactly one valid JSON object matching the requested schema. "
+            "No markdown fences, no prose outside JSON.\n\n"
+            + prompt
+        )
         images = images or []
 
         backend = (backend or self.settings.model_backend).strip().lower()

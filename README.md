@@ -59,7 +59,7 @@ src/ui_ux_company/
   storage.py                       # SQLite runs, events, approvals, token ledger
   artifacts.py                     # versioned artifact store
   static/                          # dependency-free control room
-tests/                             # 13 passing tests
+tests/                             # 14 passing tests
 target_ui_example/                 # generated placeholder reference image
 ui_ux-agent_company.md             # full constitution
 ```
@@ -87,9 +87,10 @@ The SPA is a narrow left icon rail plus tabs:
 
 - **Overview** — decree composer, recent runs, live timeline, compact org summary, approvals, budget, artifacts, Target_ui preview, evolution quick list.
 - **Live Flow** — full-page hierarchical graph with CEO/Chief/tier leads/specialists, codenames A1–A36, idle/running/completed/stopped/error/waiting icons, current work labels, thin colored signal lines, company feed, zoom controls, and click-through agent detail. Terminal runs clamp running nodes to completed/stopped/failed.
-- **Approvals** — sub-tabs for **Pending** and **Decision history**; source agent/codename, due time, overdue badge, approve/reject/dictate. Stale escalations from terminal runs are auto-dismissed into history.
+- **Approvals** — sub-tabs for **Pending** and **Decision history**; source agent/codename, due time, overdue badge, approve/reject/dictate, and a **View proposal** link for evolution approvals. Stale escalations from terminal runs are auto-dismissed into history.
 - **Artifacts** — run selector, preview, screenshot upload, Re-run QA.
 - **Contract** — versioned design-contract editor with Save version and Re-run critique.
+- **History** — global combined history of company runs and evolution audits; tap any entry to restore its flow, timeline, artifacts, contract, and outputs. When no company run or evolution is active, the live panels clear automatically; nothing is lost because it is in History.
 - **Target_ui** — target + current-UI scan, recursive folder search, confidence/conflicts, and a rectangle annotation editor mapped to components.
 - **Evolution** — Observe → Diagnose → Evaluate → Approve → Apply → Canary cards, stop, approve/reject/dictate, automated metric canary, promote, and registry rollback.
 - **Settings** — active project switcher, project/current UI/Target_ui folders, all OpenCode models with a searchable picker, model test, editable token budget, autonomy, project validation, webhook/browser notifications, session/RBAC, audit log, and mock-data cleanup.
@@ -198,7 +199,7 @@ Upload screenshots to the control room via `POST /api/runs/{run_id}/screenshots`
 - **Live Flow:** Full-page hierarchical graph. Icons show idle / running / completed / error / waiting. Agent cards show codenames and current work labels. Thin colored lines show handoffs, reviews, artifacts, feedback, escalations, and instructions. Click any agent for status, last event, artifacts, and token usage.
 - **Modes:** Explore, Design, Build, Ship, Audit, Fix.
 - **Run stop:** Live run and Live Flow have a Stop button. Default is graceful; the current model call is cancelled and the run/approvals are marked stopped.
-- **Evolution:** Start audit, watch Observe → Diagnose → Evaluate → Approve → Apply → Canary cards, stop the audit, Approve / Reject / Dictate, and rollback an applied registry change.
+- **Evolution:** Start audit, watch Observe → Diagnose → Evaluate → Approve → Apply → Canary cards, stop the audit, Approve / Reject / Dictate, and rollback an applied registry change. **Auto-apply safe changes** skips the approval pause only when you pre-approve it; unsafe structural changes still require deployment.
 - **Design contract:** Contract tab → edit authoritative decisions/acceptance matrix → Save version → Re-run critique.
 - **QA re-check:** Artifacts → upload screenshots → Re-run QA. It reuses the existing run and does not redo design.
 - **Approvals:** Every pending decision shows its source agent/codename and due time. Approve / Reject / Dictate; decided cards move to Decision History.

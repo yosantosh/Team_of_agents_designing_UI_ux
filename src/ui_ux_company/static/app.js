@@ -11,6 +11,9 @@ const state = {
   models: null,
   projects: [],
   audit: [],
+  history: [],
+  historyFilter: "all",
+  contextMode: "none",
   authUser: null,
   runId: null,
   run: null,
@@ -36,6 +39,9 @@ const state = {
   runSource: null,
   evolutionSource: null,
 };
+
+const ACTIVE_RUN_STATUSES = new Set(["queued", "running", "awaiting_approval", "awaiting_design_approval"]);
+const ACTIVE_EVOLUTION_STATUSES = new Set(["running", "evaluating", "proposed", "pending_approval", "canary"]);
 
 const $ = (id) => document.getElementById(id);
 
@@ -128,6 +134,7 @@ function switchTab(name) {
     setTimeout(drawFlowEdges, 40);
   }
   if (name === "artifacts") renderArtifactsTab();
+  if (name === "history") renderHistory();
   if (name === "contract") {
     if (!state.contractRunId) state.contractRunId = state.runId || state.runs[0]?.run_id || null;
     renderContract();
@@ -154,7 +161,7 @@ async function init() {
         return;
       }
     }
-    const [health, registry, budget, pending, allApprovals, runs, target, current, evolutions, settings, projects] = await Promise.all([
+    const [health, registry, budget, pending, allApprovals, runs, target, current, evolutions, settings, projects, history] = await Promise.all([
       api("/api/health"),
       api("/api/registry"),
       api("/api/budget"),
@@ -166,6 +173,7 @@ async function init() {
       api("/api/evolve"),
       api("/api/settings"),
       api("/api/projects"),
+      api("/api/history"),
     ]);
     state.health = health;
     state.registry = registry;
@@ -178,13 +186,26 @@ async function init() {
     state.evolutions = evolutions.proposals || [];
     state.settings = settings;
     state.projects = projects.projects || [];
+    state.history = history.history || [];
     await loadModels(false);
-    state.evolutionId = defaultEvolutionId();
     renderAll();
     const initialTab = location.hash.replace("#", "");
     if (initialTab) switchTab(initialTab);
-    if (state.runs[0]) await loadRun(state.runs[0].run_id, false);
-    if (state.evolutionId) await loadEvolution(state.evolutionId, false);
+    const activeRun = (state.runs || []).find((run) => ACTIVE_RUN_STATUSES.has(run.status));
+    const activeEvolution = (state.evolutions || []).find((proposal) => ACTIVE_EVOLUTION_STATUSES.has(proposal.status));
+    if (activeRun) {
+      state.contextMode = "live";
+      await loadRun(activeRun.run_id, true);
+    } else {
+      clearRunContext({ render: true });
+    }
+    if (activeEvolution) {
+      state.contextMode = "live";
+      state.evolutionId = activeEvolution.proposal_id;
+      await loadEvolution(activeEvolution.proposal_id, true);
+    } else {
+      clearEvolutionContext({ render: true });
+    }
     setInterval(poll, 4000);
   } catch (error) {
     $("footer-status").textContent = `init error: ${error.message}`;
@@ -201,25 +222,32 @@ function filterProductionRuns(runs) {
 
 async function poll() {
   try {
-    const [budget, pending, allApprovals, runs, evolutions] = await Promise.all([
+    const [budget, pending, allApprovals, runs, evolutions, history] = await Promise.all([
       api("/api/budget"),
       api("/api/approvals?status=pending"),
       api("/api/approvals?status=all"),
       api("/api/runs"),
       api("/api/evolve"),
+      api("/api/history"),
     ]);
     state.budget = budget;
     state.approvals = pending.approvals || [];
     state.allApprovals = allApprovals.approvals || [];
     state.runs = filterProductionRuns(runs.runs || []);
     state.evolutions = evolutions.proposals || [];
+    state.history = history.history || [];
     renderBudget();
     renderApprovals();
     renderRuns();
     renderEvolutions();
+    renderHistory();
     renderOrgSummary();
-    if (state.runId) await loadRun(state.runId, false);
-    if (state.evolutionId) await loadEvolution(state.evolutionId, false);
+    if (state.contextMode === "history") {
+      if (state.runId) await loadRun(state.runId, false);
+      if (state.evolutionId) await loadEvolution(state.evolutionId, false);
+    } else {
+      await syncLiveContext();
+    }
   } catch (error) {
     $("footer-status").textContent = `poll error: ${error.message}`;
   }
@@ -410,6 +438,29 @@ function renderOrgSummary() {
   `).join("");
 }
 
+function renderHistory() {
+  const list = $("history-list");
+  if (!list) return;
+  const items = (state.history || []).filter((item) => state.historyFilter === "all" || item.kind === state.historyFilter);
+  list.innerHTML = items.length ? items.map((item) => `
+    <div class="item clickable" data-history-kind="${escapeHtml(item.kind)}" data-history-id="${escapeHtml(item.id)}">
+      <div class="title">${escapeHtml(item.title)}</div>
+      <div class="meta">
+        <span class="badge ${statusClass(item.status)}">${escapeHtml(item.status)}</span>
+        <span>${item.kind === "evolution" ? "evolution" : "company"}</span>
+        <span>${escapeHtml(item.mode || "")}</span>
+        <span>${fmtTime(item.created_at)}</span>
+      </div>
+    </div>
+  `).join("") : `<div class="muted">No history entries for this filter.</div>`;
+  list.querySelectorAll("[data-history-id]").forEach((el) => {
+    el.addEventListener("click", () => {
+      if (el.dataset.historyKind === "evolution") loadHistoryEvolution(el.dataset.historyId);
+      else loadHistoryRun(el.dataset.historyId);
+    });
+  });
+}
+
 function renderRuns() {
   const runs = state.runs || [];
   $("run-count").textContent = String(runs.length);
@@ -482,6 +533,106 @@ async function loadRun(runId, connect = true) {
   } catch (error) {
     toast(`Run load error: ${error.message}`, "error");
   }
+}
+
+function clearRunContext({ render = true } = {}) {
+  if (state.runSource) state.runSource.close();
+  state.runSource = null;
+  state.runId = null;
+  state.run = null;
+  state.runState = {};
+  state.events = [];
+  state.messages = [];
+  state.artifacts = [];
+  state.agentStatus = {};
+  state.flowRunId = null;
+  state.artifactRunId = null;
+  state.contractRunId = null;
+  state.contract = null;
+  state.contractVersions = [];
+  state.contractCritique = null;
+  if (render) {
+    renderRunMeta();
+    renderTimeline();
+    renderArtifactsQuick();
+    renderArtifactsTab();
+    renderFlow();
+    renderOrgSummary();
+    renderContract();
+  }
+}
+
+function clearEvolutionContext({ render = true } = {}) {
+  if (state.evolutionSource) state.evolutionSource.close();
+  state.evolutionSource = null;
+  state.evolutionId = null;
+  state.evolution = null;
+  state.evolutionEvents = [];
+  if (render) renderEvolution();
+}
+
+function clearAllLiveContext() {
+  clearRunContext({ render: true });
+  clearEvolutionContext({ render: true });
+  state.contextMode = "none";
+}
+
+async function syncLiveContext() {
+  if (state.contextMode === "history") return;
+  const activeRun = (state.runs || []).find((run) => ACTIVE_RUN_STATUSES.has(run.status));
+  const activeEvolution = (state.evolutions || []).find((proposal) => ACTIVE_EVOLUTION_STATUSES.has(proposal.status));
+
+  if (state.contextMode === "none") {
+    if (activeRun) {
+      state.contextMode = "live";
+      await loadRun(activeRun.run_id, true);
+    }
+    if (activeEvolution) {
+      state.contextMode = "live";
+      state.evolutionId = activeEvolution.proposal_id;
+      await loadEvolution(activeEvolution.proposal_id, true);
+    }
+    return;
+  }
+
+  if (state.contextMode === "live") {
+    if (state.runId) {
+      const run = (state.runs || []).find((item) => item.run_id === state.runId);
+      if (!run || !ACTIVE_RUN_STATUSES.has(run.status)) {
+        clearRunContext({ render: true });
+      } else {
+        await loadRun(state.runId, false);
+      }
+    }
+    if (state.evolutionId) {
+      const proposal = (state.evolutions || []).find((item) => item.proposal_id === state.evolutionId);
+      if (!proposal || !ACTIVE_EVOLUTION_STATUSES.has(proposal.status)) {
+        clearEvolutionContext({ render: true });
+      } else {
+        await loadEvolution(state.evolutionId, false);
+      }
+    }
+    if (!state.runId && !state.evolutionId) state.contextMode = "none";
+  }
+}
+
+async function loadHistoryRun(runId) {
+  state.contextMode = "history";
+  state.runId = runId;
+  state.flowRunId = runId;
+  state.artifactRunId = runId;
+  state.contractRunId = runId;
+  await loadRun(runId, false);
+  switchTab("flow");
+  toast("Historical company run loaded.");
+}
+
+async function loadHistoryEvolution(proposalId) {
+  state.contextMode = "history";
+  state.evolutionId = proposalId;
+  await loadEvolution(proposalId, false);
+  switchTab("evolution");
+  toast("Historical evolution audit loaded.");
 }
 
 function deriveAgentStatus() {
@@ -802,6 +953,7 @@ function approvalCard(approval, compact = false) {
       <div class="message">${escapeHtml(short(approval.message || "", compact ? 180 : 500))}</div>
       ${options && !compact ? `<div class="meta" style="margin-top:7px">${options}</div>` : ""}
       <div class="approval-actions">
+        ${approval.gate === "evolution_approval" && approval.run_id ? `<button class="btn small ghost" data-evolution-view="${escapeHtml(approval.run_id)}">View proposal</button>` : ""}
         <button class="btn small primary" data-approval="${escapeHtml(approval.approval_id)}" data-decision="approve">Approve</button>
         <button class="btn small danger" data-approval="${escapeHtml(approval.approval_id)}" data-decision="reject">Reject</button>
         <button class="btn small ghost" data-approval="${escapeHtml(approval.approval_id)}" data-decision="dictate">Dictate</button>
@@ -859,6 +1011,9 @@ function renderApprovals() {
       if (button.dataset.decision === "dictate") openDictate(button.dataset.approval);
       else decideApproval(button.dataset.approval, button.dataset.decision);
     });
+  });
+  document.querySelectorAll("[data-evolution-view]").forEach((button) => {
+    button.addEventListener("click", () => openEvolution(button.dataset.evolutionView));
   });
 }
 
@@ -1191,6 +1346,7 @@ function renderContract() {
     editor.value = JSON.stringify(state.contract, null, 2);
     $("contract-status").textContent = `Run ${state.contractRunId} · ${state.contractVersions.length} version(s)`;
   } else {
+    editor.value = "";
     $("contract-status").textContent = state.contractRunId ? `No contract loaded for ${state.contractRunId}` : "Select a run with a design contract.";
   }
   $("contract-versions").innerHTML = state.contractVersions.length ? state.contractVersions.map((version) => `
@@ -1294,8 +1450,7 @@ function evolutionTitle(item) {
 
 function defaultEvolutionId() {
   const proposals = state.evolutions || [];
-  const active = proposals.find((p) => ["pending_approval", "evaluating", "proposed", "running"].includes(p.status));
-  return (active || proposals[0])?.proposal_id || null;
+  return proposals.find((p) => ACTIVE_EVOLUTION_STATUSES.has(p.status))?.proposal_id || null;
 }
 
 function renderEvolutions() {
@@ -1321,6 +1476,8 @@ function renderEvolutions() {
 }
 
 async function openEvolution(proposalId) {
+  const proposal = (state.evolutions || []).find((item) => item.proposal_id === proposalId);
+  state.contextMode = proposal && ACTIVE_EVOLUTION_STATUSES.has(proposal.status) ? "live" : "history";
   switchTab("evolution");
   state.evolutionId = proposalId;
   await loadEvolution(proposalId, true);
@@ -1328,16 +1485,19 @@ async function openEvolution(proposalId) {
 
 async function startEvolution() {
   const btn = $("evolution-start");
+  state.contextMode = "live";
   if (btn) btn.disabled = true;
   try {
+    const autoApprove = Boolean($("evolution-auto")?.checked);
     const response = await api("/api/evolve", {
       method: "POST",
-      body: JSON.stringify({ focus: "quality", auto_approve: false }),
+      body: JSON.stringify({ focus: "quality", auto_approve: autoApprove }),
     });
     state.evolutionId = response.proposal_id;
     switchTab("evolution");
     await loadEvolution(response.proposal_id, true);
-    toast("Evolution audit started.");
+    if (autoApprove) state.contextMode = "history";
+    toast(autoApprove ? "Evolution audit started; safe changes will auto-apply." : "Evolution audit started; it will pause for your approval.");
     await poll();
   } catch (error) {
     toast(`Evolution start error: ${error.message}`, "error");
@@ -1823,6 +1983,13 @@ $("tabs").addEventListener("click", (event) => {
   const tab = event.target.closest(".tab");
   if (tab) switchTab(tab.dataset.tab);
 });
+$("history-filters").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-history-filter]");
+  if (!button) return;
+  state.historyFilter = button.dataset.historyFilter;
+  document.querySelectorAll("[data-history-filter]").forEach((item) => item.classList.toggle("active", item === button));
+  renderHistory();
+});
 $("approval-subtabs").addEventListener("click", (event) => {
   const button = event.target.closest("[data-approval-subtab]");
   if (button) switchApprovalSubtab(button.dataset.approvalSubtab);
@@ -2017,6 +2184,7 @@ async function stopRun(runId) {
 }
 
 async function startRun() {
+  state.contextMode = "live";
   const prompt = $("decree").value.trim();
   if (!prompt) { $("decree").focus(); return; }
   const button = $("run-btn");

@@ -729,6 +729,43 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def list_runs(limit: int = 50):
         return {"runs": storage.list_runs(limit)}
 
+    @app.get("/api/history")
+    async def get_history(limit: int = 100):
+        items = []
+        for run in storage.list_runs(limit):
+            state = run.get("state") or {}
+            if isinstance(state, dict) and state.get("backend") == "mock":
+                continue
+            items.append(
+                {
+                    "kind": "company",
+                    "id": run["run_id"],
+                    "title": run.get("prompt") or run["run_id"],
+                    "status": run.get("status"),
+                    "created_at": run.get("created_at"),
+                    "mode": run.get("mode"),
+                    "project_id": state.get("project_id") if isinstance(state, dict) else None,
+                }
+            )
+        for proposal in storage.list_evolutions(limit):
+            prop = proposal.get("proposal") or {}
+            title = proposal.get("title") or "Evolution"
+            if proposal.get("status") == "stopped" and title in {"Evolution audit running", "Evolution audit starting"}:
+                title = "Evolution stopped before proposal"
+            items.append(
+                {
+                    "kind": "evolution",
+                    "id": proposal["proposal_id"],
+                    "title": title,
+                    "status": proposal.get("status"),
+                    "created_at": proposal.get("created_at"),
+                    "mode": "evolution",
+                    "project_id": prop.get("project_id"),
+                }
+            )
+        items.sort(key=lambda item: item.get("created_at") or "", reverse=True)
+        return {"history": items[:limit]}
+
     @app.get("/api/runs/{run_id}")
     async def get_run(run_id: str):
         run = storage.get_run(run_id)

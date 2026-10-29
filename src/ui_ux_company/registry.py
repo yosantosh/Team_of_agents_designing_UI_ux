@@ -289,6 +289,11 @@ class Registry:
                     self.models[target]["model"] = to_value
                     self.data["models"] = self.models
                     applied.append(change)
+            elif kind == "prompt_update":
+                if target and to_value:
+                    overrides = self.data.setdefault("prompt_overrides", {})
+                    overrides[str(target)] = str(to_value)
+                    applied.append(change)
             elif kind == "gate_threshold":
                 self.data.setdefault("defaults", {})[str(target)] = to_value
                 applied.append(change)
