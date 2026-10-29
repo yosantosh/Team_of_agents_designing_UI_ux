@@ -13,6 +13,7 @@ from langgraph.types import Command, interrupt
 
 from .agents import AgentRunner
 from .artifacts import ArtifactStore
+from .codeworker import CodeWorker
 from .config import Settings
 from .events import EventBus
 from .gateway import ModelGateway
@@ -86,6 +87,7 @@ class CompanyGraph:
         artifacts: ArtifactStore | None = None,
         gateway: ModelGateway | None = None,
         agents: AgentRunner | None = None,
+        code_worker: CodeWorker | None = None,
     ):
         self.settings = settings or Settings.from_env()
         self.registry = registry or load_registry(self.settings)
@@ -98,6 +100,7 @@ class CompanyGraph:
         self.artifacts = artifacts or ArtifactStore(self.settings, self.storage)
         self.gateway = gateway or ModelGateway(self.settings, self.registry, self.storage)
         self.agents = agents or AgentRunner(self.gateway, self.registry)
+        self.code_worker = code_worker or CodeWorker(self.settings, self.artifacts)
         self.checkpointer = None
         self._checkpointer_cm = None
         self.graph = None
@@ -170,7 +173,11 @@ class CompanyGraph:
             {"implement": "engineering_lead_review", "escalate": "escalate"},
         )
         builder.add_edge("engineering_lead_review", "implement")
-        builder.add_edge("implement", "qa")
+        builder.add_conditional_edges(
+            "implement",
+            self._route_after_implement,
+            {"qa": "qa", "escalate": "escalate"},
+        )
         builder.add_edge("qa", "quality_lead_review")
         builder.add_edge("quality_lead_review", "manager_eval")
         builder.add_conditional_edges(
@@ -194,6 +201,13 @@ class CompanyGraph:
 
     def _route_after_human(self, state: CompanyState) -> str:
         return "implement" if state.get("design_approved") else "escalate"
+
+    def _route_after_implement(self, state: CompanyState) -> str:
+        implementation = state.get("implementation") or {}
+        code_edits = implementation.get("code_edits")
+        if code_edits and code_edits.get("status") not in {None, "edited"}:
+            return "escalate"
+        return "qa"
 
     def _route_after_manager(self, state: CompanyState) -> str:
         gate = state.get("eval_gate", "escalate")
@@ -541,13 +555,30 @@ class CompanyGraph:
                 did=f"Assigned {work_label(role)}",
                 doing=f"{work_label(role)} in progress",
             )
+            await self._event(
+                state,
+                "agent.started",
+                f"{role} started",
+                role,
+                {
+                    "model": state.get("model") or self.settings.model_override or "registry default",
+                    "work_label": work_label(role),
+                },
+            )
         results = await self.agents.run_many(
             jobs,
             run_id=state["run_id"],
             backend=state.get("backend"),
             model=state.get("model"),
         )
-        for role, _goal, _context, _images in jobs:
+        for (role, _goal, _context, _images), result in zip(jobs, results):
+            await self._event(
+                state,
+                "agent.completed",
+                f"{role} completed",
+                role,
+                {"usage": result.usage, "model": result.model, "work_label": work_label(role)},
+            )
             await self._message(
                 state,
                 role,
@@ -922,7 +953,7 @@ class CompanyGraph:
 
     @staticmethod
     def _design_only(mode: str | None) -> bool:
-        return mode in {"explore", "design", "audit", "fix"}
+        return mode in {"explore", "design", "audit"}
 
     async def _implement(self, state: CompanyState) -> dict[str, Any]:
         if self._design_only(state.get("mode")):
@@ -953,6 +984,76 @@ class CompanyGraph:
         data = dict(result.data)
         if state.get("demo"):
             data["simulated"] = True
+        if (
+            not state.get("demo")
+            and self.code_worker.enabled
+            and state.get("mode") in {"build", "ship", "fix"}
+        ):
+            await self._event(state, "code.editing", "Implementation worker editing project files", "compose_implementer")
+            await self._event(
+                state,
+                "agent.started",
+                "compose_implementer started code edits",
+                "compose_implementer",
+                {
+                    "model": state.get("model") or self.settings.model_override or "registry default",
+                    "work_label": "Code implementation",
+                },
+            )
+            await self._message(
+                state,
+                "compose_implementer",
+                "engineering_lead",
+                "handoff",
+                did="Starting code edits",
+                doing="Applying the approved plan to an isolated worktree",
+            )
+            repo_path = self.profile.project.get("repo") or str(self.settings.project_dir or self.settings.root)
+            try:
+                code_result = await self.code_worker.apply(
+                    state["run_id"],
+                    str(repo_path),
+                    str(state.get("change_request", {}).get("problem") or state.get("prompt", "Implement the approved design")),
+                    {
+                        "prompt": state.get("prompt"),
+                        "change_request": state.get("change_request", {}),
+                        "design_contract": state.get("design_contract", {}),
+                        "screen_spec": state.get("screen_spec", {}),
+                        "implementation_plan": data,
+                        "project": self.profile.project,
+                    },
+                )
+            except Exception as exc:
+                code_result = {"status": "failed", "reason": str(exc)}
+            data["code_edits"] = code_result
+            data["status"] = code_result.get("status", "unknown")
+            await self._event(
+                state,
+                "code.edited" if code_result.get("status") == "edited" else "code.edit_result",
+                f"Code worker: {code_result.get('status')}",
+                "compose_implementer",
+                {
+                    "worktree": code_result.get("worktree"),
+                    "branch": code_result.get("branch"),
+                    "changed_files": code_result.get("changed_files", []),
+                },
+            )
+            await self._event(
+                state,
+                "agent.completed",
+                "compose_implementer completed code edits",
+                "compose_implementer",
+                {"work_label": "Code implementation"},
+            )
+            await self._message(
+                state,
+                "compose_implementer",
+                "engineering_lead",
+                "artifact",
+                did=f"Code worker: {code_result.get('status')}",
+                doing="Reviewing the implementation diff" if code_result.get("status") == "edited" else "Reporting the code-worker result",
+                artifact=code_result.get("diff_artifact"),
+            )
         await self._write(state, "implementation_plan.json", data, "compose_implementer")
         await self._event(state, "stage.completed", "Implementation plan ready", "compose_implementer")
         return {"implementation": data, "status": "qa"}
@@ -1253,6 +1354,12 @@ class CompanyGraph:
         reason = "Work did not pass the required gates within the rework limit, or the Dictator rejected the design."
         if critique.get("verdict") == "ESCALATE":
             reason = "The independent critic escalated a design decision."
+        code_edits = (state.get("implementation") or {}).get("code_edits") or {}
+        if code_edits.get("status") in {"failed", "no_changes", "disabled"}:
+            reason = (
+                f"Code worker {code_edits.get('status')}: "
+                f"{code_edits.get('reason') or 'no reviewable code patch was produced'}"
+            )
         if qa.get("gate") == "not_run":
             reason = "QA evidence is missing; production release is blocked until real screenshots and test evidence exist."
         options = [

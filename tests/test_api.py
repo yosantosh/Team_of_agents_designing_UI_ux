@@ -22,6 +22,10 @@ def test_api_health_and_registry(settings):
         assert settings_response.status_code == 200
         assert settings_response.json()["backend"] == "mock"
         assert settings_response.json()["monthly_token_budget"] > 0
+        assert settings_response.json()["code_edits_enabled"] is True
+        assert settings_response.json()["code_edit_mode"] == "worktree"
+        bad_mode = client.put("/api/settings", json={"code_edit_mode": "unsafe-unknown"})
+        assert bad_mode.status_code == 400
         fs = client.get("/api/fs/list", params={"path": str(settings.root)})
         assert fs.status_code == 200
         assert fs.json()["path"]

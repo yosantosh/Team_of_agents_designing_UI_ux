@@ -234,9 +234,28 @@ The dashboard shows used/remaining tokens, estimated cost, top agents, and top m
 
 ---
 
+## Code editing (build / ship / fix)
+
+The company separates **design ownership** from **code ownership**, the same way a real product org does:
+
+- **Design tier (A16–A18, A22):** owns tokens, screen specs, the design contract, and independent critique. It writes design artifacts, not application code.
+- **Implementation tier (A19 Compose Implementer, A5 Engineering Lead):** owns code changes. After the Dictator approves the design gate, A19 invokes a real OpenCode `build` worker against the target Android repository.
+- **Review and release:** A5 reviews the implementation contract, A6/A7 run QA, and the normal human/release gates still apply.
+
+Code edits happen only in `build`, `ship`, and `fix` runs. `explore`, `design`, and `audit` never touch project code. The worker writes `code_edit_result.json` and `code_diff.patch` into the run artifacts.
+
+**Modes** (Settings → Code editing):
+
+- **Isolated worktree (default, recommended):** creates branch `uiux/<run_id>` under `.runtime/worktrees/<run_id>`, edits real project files there, commits the result, and captures a reviewable patch. The target checkout stays untouched. The target repo must be clean (commit or stash first).
+- **Direct working tree (unsafe):** edits the target checkout in place. Use only when you explicitly want that.
+
+Toggle **Allow build/ship/fix agents to edit project files** and choose the mode in Settings. The defaults can also be set with `UIUX_CODE_EDITS`, `UIUX_CODE_EDIT_MODE`, `UIUX_CODE_WORKER_AGENT`, `UIUX_CODE_WORKER_MODEL`, and `UIUX_CODE_WORKER_TIMEOUT`.
+
+---
+
 ## Current limitations (honest)
 
-**Implemented in this build:** left rail, full-page flow, CEO/5 leads/codenames, real tier-lead review gates, company feed and signal lines, approval provenance/SLA/overdue, decision history, modes, model test, run stop, recursive folder search, current-UI baseline + visual diff, project validation, mock-data cleanup, QA re-check, design-contract editor, evolution rollback + metric canary, searchable model picker, flow zoom, target annotations, multi-project active switcher, token RBAC + audit log, webhook/browser notifications, Postgres checkpoint support, and S3/MinIO artifact mirroring.
+**Implemented in this build:** left rail, full-page flow, CEO/5 leads/codenames, real tier-lead review gates, company feed and signal lines, approval provenance/SLA/overdue, decision history, modes, model test, run stop, recursive folder search, current-UI baseline + visual diff, project validation, mock-data cleanup, QA re-check, design-contract editor, evolution rollback + metric canary, searchable model picker, flow zoom, target annotations, multi-project active switcher, token RBAC + audit log, webhook/browser notifications, Postgres checkpoint support, S3/MinIO artifact mirroring, and real build/ship/fix code workers with worktree isolation and reviewable diffs.
 
 **Still limited / queued:**
 - App metadata still uses SQLite unless migrated; Postgres currently backs LangGraph checkpoints.
@@ -252,7 +271,7 @@ The dashboard shows used/remaining tokens, estimated cost, top agents, and top m
 Other limitations:
 
 - **Local MVP:** SQLite + in-process event bus.
-- **Implementation is a plan/patch contract**, not an autonomous commit. Code execution should be a separate, sandboxed OpenCode build-worker path with Git worktrees.
+- **Code worker:** real OpenCode `build` edits in an isolated worktree by default; merge/promotion remains human-owned. Direct mode edits the checkout and is explicitly unsafe.
 - **Visual QA** has the adapter contract and upload path; the full emulator/ADB automation is the next production step.
 - **Functional/a11y QA** accepts test evidence; it does not yet drive UIAutomator/Espresso itself.
 - **Evolution shadow eval** is heuristic; production needs LangSmith experiments and golden tasks.

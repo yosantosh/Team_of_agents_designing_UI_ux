@@ -58,6 +58,8 @@ class SettingsUpdate(BaseModel):
     current_ui_dir: str | None = None
     autonomy_level: str | None = None
     webhook_url: str | None = None
+    code_edits_enabled: bool | None = None
+    code_edit_mode: str | None = None
 
 
 class ModelTestRequest(BaseModel):
@@ -328,6 +330,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "governance": profile.autonomy.get("governance", {}),
             "backend": settings.model_backend,
             "webhook_url": settings.webhook_url,
+            "code_edits_enabled": settings.code_edits_enabled,
+            "code_edit_mode": settings.code_edit_mode,
             "registry_version": registry.version,
             "project_validation": _project_validation(),
         }
@@ -383,6 +387,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if request.webhook_url is not None:
             settings.webhook_url = request.webhook_url
             updates["webhook_url"] = request.webhook_url
+        if request.code_edits_enabled is not None:
+            settings.code_edits_enabled = bool(request.code_edits_enabled)
+            updates["code_edits_enabled"] = bool(request.code_edits_enabled)
+        if request.code_edit_mode:
+            if request.code_edit_mode not in {"worktree", "direct"}:
+                raise HTTPException(status_code=400, detail="code_edit_mode must be worktree or direct")
+            settings.code_edit_mode = request.code_edit_mode
+            updates["code_edit_mode"] = request.code_edit_mode
         if updates:
             save_runtime_settings(settings, **updates)
         return await get_settings()

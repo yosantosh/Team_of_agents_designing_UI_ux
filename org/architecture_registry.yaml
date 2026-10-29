@@ -1,4 +1,4 @@
-version: "1.0.0"
+version: "1.0.1"
 organization: "Native Android UI/UX Agentic Company"
 owner: "Dictator (Human Product Owner / Manager)"
 description: >
@@ -764,7 +764,18 @@ gates:
     owner: independent_design_critic
     required: true
     sla_minutes: 240
-    pass_criteria: "Score >= 0.80; no critical hierarchy, token, state, target-fidelity, or Android-law issues."
+    pass_criteria: "Rubric: every blocker criterion scores >= 3/4; non-blocker findings are deferred. Max 2 rework cycles, then the design lead issues a binding disposition."
+    rubric:
+      scale: "0-4"
+      blocker_min: 3
+      max_rework: 2
+      non_blocker_policy: "deferred_backlog"
+      criteria:
+        - single_primary_action
+        - copy_quietness
+        - layout_360dp
+        - font_scale_200
+        - state_coverage
   - id: human_design_approval
     owner: dictator
     required: true
@@ -851,6 +862,15 @@ evolution_policy:
     - budget_caps
     - pod_composition
     - tool_allowlist
+
+evolution_history:
+  - proposal_id: "evo_20261029_220836_3d847925"
+    applied_at: "2026-10-29T22:08:53.703099+00:00"
+    from_version: "1.0.0"
+    to_version: "1.0.1"
+    change_type: "gate_threshold"
+    target: "design_critique"
+    summary: "Normalized the rubric-scored design acceptance gate into structured gate fields (blocker floor, deferred non-blockers, max 2 rework cycles)."
 
 metrics:
   - id: first_pass_yield

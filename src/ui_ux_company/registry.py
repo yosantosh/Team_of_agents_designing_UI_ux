@@ -270,6 +270,7 @@ class Registry:
             shutil.copy2(self.path, backup)
 
         applied: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
         for change in changes:
             kind = change.get("type")
             target = change.get("target")
@@ -295,11 +296,31 @@ class Registry:
                     overrides[str(target)] = str(to_value)
                     applied.append(change)
             elif kind == "gate_threshold":
-                self.data.setdefault("defaults", {})[str(target)] = to_value
-                applied.append(change)
+                gate = next((g for g in self.gates if str(g.get("id")) == str(target)), None)
+                if gate is not None and isinstance(to_value, dict):
+                    gate.update(to_value)
+                    applied.append(change)
+                elif str(target) in (self.data.get("defaults") or {}) and isinstance(to_value, (int, float, bool)):
+                    self.data["defaults"][str(target)] = to_value
+                    applied.append(change)
+                else:
+                    skipped.append(
+                        {
+                            **change,
+                            "reason": "gate_threshold requires a gate id with a structured dict or an existing numeric default key",
+                        }
+                    )
             elif kind == "budget_cap":
-                self.data.setdefault("defaults", {})[str(target)] = to_value
-                applied.append(change)
+                if str(target) in (self.data.get("defaults") or {}) and isinstance(to_value, (int, float)):
+                    self.data["defaults"][str(target)] = to_value
+                    applied.append(change)
+                else:
+                    skipped.append(
+                        {
+                            **change,
+                            "reason": "budget_cap requires an existing numeric default key",
+                        }
+                    )
             elif kind == "add_agent":
                 spec = to_value if isinstance(to_value, dict) else {}
                 agent_id = str(spec.get("id") or "").strip()
@@ -327,6 +348,14 @@ class Registry:
                     applied.append(change)
 
         self._enrich()
+        if not applied:
+            return {
+                "version": self.version,
+                "applied": [],
+                "skipped": skipped,
+                "requested": changes,
+                "backup": str(backup),
+            }
         parts = self.version.split(".")
         while len(parts) < 3:
             parts.append("0")
@@ -355,6 +384,7 @@ class Registry:
         return {
             "version": new_version,
             "applied": applied,
+            "skipped": skipped,
             "requested": changes,
             "backup": str(backup),
         }

@@ -373,6 +373,15 @@
           <p class="hint">Webhook receives a JSON body with title, message, run id, and event data.</p>
         </div>
         <div class="card">
+          <div class="card-head"><h2>Code editing</h2><button class="btn ghost small" id="save-code-edits">Save</button></div>
+          <label class="checks" style="margin:0 0 8px"><input type="checkbox" id="code-edits-enabled" /> Allow build/ship/fix agents to edit project files</label>
+          <select id="code-edit-mode" class="wide-select">
+            <option value="worktree">Isolated worktree (recommended)</option>
+            <option value="direct">Direct working tree (unsafe)</option>
+          </select>
+          <p class="hint">Design mode never edits code. Build/Ship/Fix use the code worker after the design approval gate. Worktree mode creates a reviewable branch and diff; commit or stash target-repo changes first. Direct mode writes to the current working tree.</p>
+        </div>
+        <div class="card">
           <div class="card-head"><h2>Session & audit</h2><button class="btn ghost small" id="session-login">Set API token</button></div>
           <div class="kv" id="settings-session"></div>
           <button class="btn ghost small" id="logout" style="margin-top:8px">Clear token</button>

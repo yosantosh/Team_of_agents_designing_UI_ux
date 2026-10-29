@@ -94,6 +94,11 @@ class Settings:
     auth_role: str = "dictator"
     checkpoint_backend: str = "sqlite"       # sqlite | postgres
     postgres_dsn: str = ""
+    code_edits_enabled: bool = True
+    code_edit_mode: str = "worktree"          # worktree | direct
+    code_worker_agent: str = "build"
+    code_worker_model: str = ""
+    code_worker_timeout: int = 900
     s3_bucket: str = ""
     s3_endpoint: str = ""
     s3_access_key: str = ""
@@ -146,6 +151,11 @@ class Settings:
             auth_role=os.getenv("UIUX_AUTH_ROLE", "dictator"),
             checkpoint_backend=os.getenv("UIUX_CHECKPOINT_BACKEND", "sqlite").strip().lower(),
             postgres_dsn=os.getenv("UIUX_POSTGRES_DSN", ""),
+            code_edits_enabled=_bool("UIUX_CODE_EDITS", True),
+            code_edit_mode=os.getenv("UIUX_CODE_EDIT_MODE", "worktree").strip().lower(),
+            code_worker_agent=os.getenv("UIUX_CODE_WORKER_AGENT", "build"),
+            code_worker_model=os.getenv("UIUX_CODE_WORKER_MODEL", ""),
+            code_worker_timeout=_int("UIUX_CODE_WORKER_TIMEOUT", 900),
             s3_bucket=os.getenv("UIUX_S3_BUCKET", ""),
             s3_endpoint=os.getenv("UIUX_S3_ENDPOINT", ""),
             s3_access_key=os.getenv("UIUX_S3_ACCESS_KEY", ""),
@@ -226,6 +236,10 @@ def load_runtime_settings(settings: Settings) -> dict[str, Any]:
         settings.autonomy_level = str(data["autonomy_level"])
     if data.get("webhook_url"):
         settings.webhook_url = str(data["webhook_url"])
+    if data.get("code_edits_enabled") is not None:
+        settings.code_edits_enabled = bool(data["code_edits_enabled"])
+    if data.get("code_edit_mode"):
+        settings.code_edit_mode = str(data["code_edit_mode"])
     if data.get("project_id"):
         settings.project_id = str(data["project_id"])
         candidate = settings.org_dir / "projects" / f"{settings.project_id}.yaml"
@@ -271,6 +285,12 @@ def save_runtime_settings(settings: Settings, **updates: Any) -> dict[str, Any]:
         elif key == "project_id":
             data["project_id"] = str(value)
             settings.project_id = str(value)
+        elif key == "code_edits_enabled":
+            data["code_edits_enabled"] = bool(value)
+            settings.code_edits_enabled = bool(value)
+        elif key == "code_edit_mode":
+            data["code_edit_mode"] = str(value)
+            settings.code_edit_mode = str(value)
         else:
             data[key] = value
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")

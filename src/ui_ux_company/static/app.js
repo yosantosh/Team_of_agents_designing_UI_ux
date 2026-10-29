@@ -1814,6 +1814,8 @@ function renderSettings() {
   $("settings-budget").textContent = fmtNumber(s.monthly_token_budget);
   $("settings-autonomy").value = s.autonomy_level || "L2";
   $("webhook-url").value = s.webhook_url || "";
+  $("code-edits-enabled").checked = Boolean(s.code_edits_enabled);
+  $("code-edit-mode").value = s.code_edit_mode || "worktree";
   fillModelSelect($("settings-model"), s.model);
   fillModelSelect($("model-select"), s.model);
   fillModelSelect($("run-model"), s.model);
@@ -2118,6 +2120,13 @@ $("model-select").addEventListener("change", async (event) => { await saveSettin
 $("settings-model").addEventListener("change", async (event) => { await saveSettings({ model: event.target.value }); });
 $("settings-autonomy").addEventListener("change", async (event) => { await saveSettings({ autonomy_level: event.target.value }); });
 $("save-webhook").addEventListener("click", async () => { await saveSettings({ webhook_url: $("webhook-url").value.trim() }); });
+$("save-code-edits").addEventListener("click", async () => {
+  await saveSettings({
+    code_edits_enabled: $("code-edits-enabled").checked,
+    code_edit_mode: $("code-edit-mode").value,
+  });
+  toast($("code-edits-enabled").checked ? `Code edits enabled (${$("code-edit-mode").value} mode).` : "Code edits disabled.");
+});
 $("enable-notifications").addEventListener("click", async () => {
   if (!("Notification" in window)) { toast("Browser notifications are not supported.", "error"); return; }
   const permission = await Notification.requestPermission();
