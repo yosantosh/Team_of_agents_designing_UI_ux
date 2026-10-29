@@ -1,0 +1,15 @@
+# Copy to org/users.yaml to enable token auth (set UIUX_AUTH=true).
+# Tokens are SHA-256 hashes; never commit real tokens.
+users:
+  - name: "Dictator"
+    role: "dictator"
+    token_sha256: "c4f70deb000c12c8b9f3d8b1cc7938d5b8eb36a1925284946a33fc93177bc522"   # dictator-dev-token
+  - name: "Design Lead"
+    role: "design_lead"
+    token_sha256: "da2f9821625403323ecca078c73c98c866f34e60223ac57556099a5f797f1d94"   # design-lead-dev-token
+  - name: "Engineer"
+    role: "engineer"
+    token_sha256: "c0ef22624fc7254f4dc6aedd6ff51ea3ccf04128664c2b3a65c9dd468cd50e61"   # engineer-dev-token
+  - name: "Viewer"
+    role: "viewer"
+    token_sha256: "069ea5597779b842b42e52f7582d836545201920a6873c213e6eef115a914fb8"   # viewer-dev-token

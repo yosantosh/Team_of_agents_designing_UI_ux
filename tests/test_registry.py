@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ui_ux_company.config import PROJECT_ROOT, Settings
-from ui_ux_company.registry import load_budget, load_profile, load_registry
+from ui_ux_company.registry import list_projects, load_budget, load_profile, load_registry
 
 
 def test_registry_loads_and_validates(settings):
@@ -25,6 +25,11 @@ def test_profile_and_budget(settings):
     assert profile.visual_qa["roborazzi"] is False
     assert profile.target_ui["precedence"] == "tiered"
     assert budget.monthly_total_tokens >= 1_000_000
+
+
+def test_project_catalog(settings):
+    projects = list_projects(settings)
+    assert any(project["id"] == "dhunchat" for project in projects)
 
 
 def test_mermaid_contains_enabled_agents(settings):

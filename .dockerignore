@@ -1,0 +1,9 @@
+.venv
+.git
+.runtime
+artifacts/runs
+artifacts/target_ui
+artifacts/current_ui
+__pycache__
+.pytest_cache
+*.egg-info

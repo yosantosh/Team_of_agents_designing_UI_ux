@@ -34,6 +34,7 @@ from .target_ui import (
 
 class CompanyState(TypedDict, total=False):
     run_id: str
+    project_id: str
     prompt: str
     mode: str
     backend: str
@@ -110,7 +111,12 @@ class CompanyGraph:
         async with self._init_lock:
             if self.graph is not None:
                 return
-            if self.settings.durable_checkpoints:
+            if self.settings.durable_checkpoints and self.settings.checkpoint_backend == "postgres" and self.settings.postgres_dsn:
+                from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+                self._checkpointer_cm = AsyncPostgresSaver.from_conn_string(self.settings.postgres_dsn)
+                self.checkpointer = await self._checkpointer_cm.__aenter__()
+            elif self.settings.durable_checkpoints:
                 self._checkpointer_cm = AsyncSqliteSaver.from_conn_string(str(self.settings.checkpoint_db))
                 self.checkpointer = await self._checkpointer_cm.__aenter__()
             else:
@@ -605,7 +611,7 @@ class CompanyGraph:
     async def _discovery_lead_review(self, state: CompanyState) -> dict[str, Any]:
         data = await self._lead_review(
             state,
-            "discovery_lead",
+            self.registry.tier_leads.get(1, "discovery_lead"),
             1,
             "Review the Tier 1 discovery and IA outputs. Confirm the brief, evidence, Android constraints, flows, and state matrix are testable before design.",
             {
@@ -622,7 +628,7 @@ class CompanyGraph:
     async def _design_lead_review(self, state: CompanyState) -> dict[str, Any]:
         data = await self._lead_review(
             state,
-            "design_lead",
+            self.registry.tier_leads.get(2, "design_lead"),
             2,
             "Review the Tier 2 design system, visual spec, and design contract. Confirm target fidelity, token discipline, state coverage, and critique readiness.",
             {
@@ -639,7 +645,7 @@ class CompanyGraph:
     async def _engineering_lead_review(self, state: CompanyState) -> dict[str, Any]:
         data = await self._lead_review(
             state,
-            "engineering_lead",
+            self.registry.tier_leads.get(3, "engineering_lead"),
             3,
             "Review the implementation plan before code work. Confirm shared-file ownership, state model, tests, merge strategy, and verification commands.",
             {
@@ -656,7 +662,7 @@ class CompanyGraph:
     async def _quality_lead_review(self, state: CompanyState) -> dict[str, Any]:
         data = await self._lead_review(
             state,
-            "quality_lead",
+            self.registry.tier_leads.get(4, "quality_lead"),
             4,
             "Review the QA evidence before manager evaluation. Confirm visual, functional, accessibility, and performance evidence is real and sufficient.",
             {
@@ -998,6 +1004,7 @@ class CompanyGraph:
                 if isinstance(image, dict) and image.get("file"):
                     target_images.append(Path(image["file"]))
         diffs = []
+        baseline_diffs = []
         if screenshots and target_images:
             from .models import TargetManifest
 
@@ -1008,6 +1015,13 @@ class CompanyGraph:
                         diffs.append({"screen": target.screen, "screenshot": str(shot), **visual_diff(Path(target.file), shot)})
                     except Exception as exc:
                         diffs.append({"screen": target.screen, "screenshot": str(shot), "error": str(exc)})
+        if screenshots and current_manifest.images:
+            for baseline, shot in match_screenshots(current_manifest, screenshots)[:4]:
+                if baseline:
+                    try:
+                        baseline_diffs.append({"screen": baseline.screen, "screenshot": str(shot), **visual_diff(Path(baseline.file), shot)})
+                    except Exception as exc:
+                        baseline_diffs.append({"screen": baseline.screen, "screenshot": str(shot), "error": str(exc)})
 
         if not screenshots:
             visual_result = {
@@ -1026,7 +1040,9 @@ class CompanyGraph:
                 {
                     "screen_spec": state.get("screen_spec", {}),
                     "target_manifest": manifest_data,
+                    "current_ui_manifest": current_manifest.model_dump(),
                     "visual_diffs": diffs,
+                    "baseline_diffs": baseline_diffs,
                     "device_matrix": self.profile.visual_qa.get("device_matrix", []),
                     "demo": state.get("demo", False),
                 },
@@ -1037,6 +1053,8 @@ class CompanyGraph:
                 visual_result["simulated"] = True
             if diffs:
                 visual_result["deterministic_diffs"] = diffs
+            if baseline_diffs:
+                visual_result["baseline_diffs"] = baseline_diffs
             await self._write(state, "visual_qa.json", visual_result, "visual_qa_inspector")
 
         if state.get("demo") and not screenshots:
@@ -1345,6 +1363,7 @@ class CompanyGraph:
         await self.bus.publish(run_id, "run.started", "Run started", "chief_orchestrator", {"prompt": prompt, "mode": mode})
         initial: CompanyState = {
             "run_id": run_id,
+            "project_id": self.settings.project_id,
             "prompt": prompt,
             "mode": mode,
             "backend": backend or self.settings.model_backend,
@@ -1399,6 +1418,40 @@ class CompanyGraph:
             self.storage.update_run(run_id, status="failed", state={**initial, "status": "failed", "error": error})
             await self.bus.publish(run_id, "run.failed", str(exc), "chief_orchestrator", error)
             return {**initial, "status": "failed", "error": error}
+
+    async def run_agent_task(
+        self,
+        run_id: str,
+        agent_id: str,
+        goal: str,
+        context: dict[str, Any] | None = None,
+        artifact_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Generic routing node: dispatch a task to any enabled agent in the registry."""
+        await self._ensure_graph()
+        agent = self.registry.agent(agent_id)
+        if not agent.get("enabled", False):
+            raise ValueError(f"agent {agent_id} is not enabled")
+        run = self.storage.get_run(run_id)
+        if not run:
+            raise ValueError("run not found")
+        state: CompanyState = dict(self.storage.get_run(run_id).get("state") or {})
+        if not state:
+            try:
+                snapshot = await self.graph.aget_state(self._config(run_id))
+                state = dict(snapshot.values or {})
+            except Exception:
+                state = {}
+        state["run_id"] = run_id
+        result = await self._call(
+            state,
+            agent_id,
+            goal,
+            context or {},
+        )
+        name = artifact_name or f"agent_task_{agent_id}.json"
+        await self._write(state, name, result.data, agent_id)
+        return {"agent": agent_id, "codename": agent.get("codename"), "data": result.data, "artifact": name}
 
     async def recritique(self, run_id: str, contract: dict[str, Any] | None = None) -> dict[str, Any]:
         """Re-run the independent critic against an edited design contract."""

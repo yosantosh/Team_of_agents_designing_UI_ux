@@ -19,6 +19,25 @@ class ArtifactStore:
     def run_dir(self, run_id: str) -> Path:
         return self.settings.artifact_dir(run_id)
 
+    def _maybe_upload_s3(self, run_id: str, path: Path) -> str | None:
+        if not getattr(self.settings, "s3_bucket", ""):
+            return None
+        try:
+            import boto3
+
+            client = boto3.client(
+                "s3",
+                endpoint_url=self.settings.s3_endpoint or None,
+                aws_access_key_id=self.settings.s3_access_key or None,
+                aws_secret_access_key=self.settings.s3_secret_key or None,
+                region_name=self.settings.s3_region,
+            )
+            key = f"runs/{run_id}/{path.name}"
+            client.upload_file(str(path), self.settings.s3_bucket, key)
+            return f"s3://{self.settings.s3_bucket}/{key}"
+        except Exception:
+            return None
+
     def _safe_name(self, name: str) -> str:
         name = name.replace("\\", "/").split("/")[-1]
         safe = "".join(ch for ch in name if ch.isalnum() or ch in "._-")
@@ -52,6 +71,10 @@ class ArtifactStore:
         safe = self._safe_name(name)
         path = self.run_dir(run_id) / safe
         path.write_text(text, encoding="utf-8")
+        s3_uri = self._maybe_upload_s3(run_id, path)
+        metadata = dict(metadata or {})
+        if s3_uri:
+            metadata["s3_uri"] = s3_uri
         return self.storage.add_artifact(
             run_id=run_id,
             name=safe,
@@ -74,6 +97,10 @@ class ArtifactStore:
         safe = self._safe_name(name)
         path = self.run_dir(run_id) / safe
         path.write_bytes(data)
+        s3_uri = self._maybe_upload_s3(run_id, path)
+        metadata = dict(metadata or {})
+        if s3_uri:
+            metadata["s3_uri"] = s3_uri
         return self.storage.add_artifact(
             run_id=run_id,
             name=safe,
@@ -97,6 +124,10 @@ class ArtifactStore:
         shutil.copy2(source, target)
         content_type = "image/png" if target.suffix.lower() == ".png" else "application/octet-stream"
         digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        s3_uri = self._maybe_upload_s3(run_id, target)
+        metadata = dict(metadata or {})
+        if s3_uri:
+            metadata["s3_uri"] = s3_uri
         return self.storage.add_artifact(
             run_id=run_id,
             name=safe,

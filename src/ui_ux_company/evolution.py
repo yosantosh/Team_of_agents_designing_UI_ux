@@ -68,7 +68,12 @@ class EvolutionEngine:
         async with self._init_lock:
             if self.graph is not None:
                 return
-            if self.settings.durable_checkpoints:
+            if self.settings.durable_checkpoints and self.settings.checkpoint_backend == "postgres" and self.settings.postgres_dsn:
+                from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+                self._cm = AsyncPostgresSaver.from_conn_string(self.settings.postgres_dsn)
+                self.checkpointer = await self._cm.__aenter__()
+            elif self.settings.durable_checkpoints:
                 self._cm = AsyncSqliteSaver.from_conn_string(str(self.settings.checkpoint_db))
                 self.checkpointer = await self._cm.__aenter__()
             else:
@@ -334,7 +339,70 @@ class EvolutionEngine:
         self.artifacts.write_json(proposal_id, "evolution_state.json", clean, created_by="org_evolution_auditor")
         return clean
 
+    async def canary(self, proposal_id: str, scope: str = "one_surface", runs: int = 5) -> dict[str, Any]:
+        """Small-scope canary observation using recent production-run metrics."""
+        existing = self.storage.get_evolution(proposal_id)
+        if not existing:
+            raise ValueError("proposal not found")
+        if existing.get("status") not in {"applied", "approved", "canary", "promoted"}:
+            raise ValueError("canary requires an applied proposal")
+        recent = self.storage.list_runs(max(1, min(runs, 50)))
+        total = len(recent)
+        completed = sum(1 for run in recent if run.get("status") == "completed")
+        escalated = sum(1 for run in recent if run.get("status") == "escalated")
+        failed = sum(1 for run in recent if run.get("status") == "failed")
+        pass_rate = (completed / total) if total else 0.0
+        verdict = "pass" if total and pass_rate >= 0.5 and failed == 0 else "fail"
+        canary = {
+            "scope": scope,
+            "runs_requested": runs,
+            "runs_observed": total,
+            "completed": completed,
+            "escalated": escalated,
+            "failed": failed,
+            "pass_rate": round(pass_rate, 3),
+            "verdict": verdict,
+            "evaluated_at": utcnow(),
+            "note": "Automated metric canary over recent production runs. Production should use LangSmith golden tasks for a full shadow eval.",
+        }
+        proposal = dict(existing.get("proposal") or {})
+        proposal["canary"] = canary
+        proposal["status"] = "promoted" if verdict == "pass" else "canary_failed"
+        self.storage.update_evolution(
+            proposal_id,
+            status=str(proposal["status"]),
+            proposal=proposal,
+            decision={"decision": "canary", "notes": f"Canary {verdict}."},
+        )
+        self.artifacts.write_json(proposal_id, "evolution_canary.json", canary, created_by="eval_red_team")
+        await self.bus.publish(
+            proposal_id,
+            "evolution.canary",
+            f"Canary {verdict}: {completed}/{total} completed",
+            "eval_red_team",
+            canary,
+        )
+        return canary
+
+    async def promote(self, proposal_id: str) -> dict[str, Any]:
+        existing = self.storage.get_evolution(proposal_id)
+        if not existing:
+            raise ValueError("proposal not found")
+        proposal = dict(existing.get("proposal") or {})
+        proposal["status"] = "promoted"
+        self.storage.update_evolution(
+            proposal_id,
+            status="promoted",
+            proposal=proposal,
+            decision={"decision": "promote", "notes": "Canary promoted."},
+        )
+        await self.bus.publish(proposal_id, "evolution.promoted", "Evolution promoted", "dictator")
+        return {"proposal_id": proposal_id, "status": "promoted"}
+
     async def rollback(self, proposal_id: str) -> dict[str, Any]:
+        existing = self.storage.get_evolution(proposal_id)
+        if existing and existing.get("status") not in {"applied", "approved", "promoted", "canary_failed"}:
+            raise ValueError("rollback requires an applied proposal")
         result = self.registry.rollback(proposal_id)
         self.storage.update_evolution(
             proposal_id,

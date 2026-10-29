@@ -4,6 +4,7 @@ import asyncio
 from collections import defaultdict
 from typing import Any, AsyncIterator
 
+from .notifications import Notifier
 from .storage import Storage
 
 
@@ -14,8 +15,9 @@ class EventBus:
     simple: one process, many subscribers, bounded queues, no backpressure stalls.
     """
 
-    def __init__(self, storage: Storage):
+    def __init__(self, storage: Storage, notifier: Notifier | None = None):
         self.storage = storage
+        self.notifier = notifier
         self._subscribers: dict[str, set[asyncio.Queue[dict[str, Any]]]] = defaultdict(set)
 
     async def publish(
@@ -27,6 +29,8 @@ class EventBus:
         data: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         event = self.storage.add_event(run_id, event_type, message, agent_id, data)
+        if self.notifier and event_type in {"approval.required", "run.paused", "run.failed", "evolution.proposed"}:
+            await self.notifier.notify(f"{event_type}: {message}", message, {"run_id": run_id, "agent_id": agent_id, **(data or {})})
         # Single-threaded event loop: set copy/add/discard is safe without a lock.
         queues = list(self._subscribers.get(run_id, set()))
         for queue in queues:

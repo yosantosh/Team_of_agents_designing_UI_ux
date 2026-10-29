@@ -9,6 +9,9 @@ const state = {
   evolutions: [],
   settings: null,
   models: null,
+  projects: [],
+  audit: [],
+  authUser: null,
   runId: null,
   run: null,
   runState: {},
@@ -20,6 +23,7 @@ const state = {
   contractRunId: null,
   contractVersions: [],
   contractCritique: null,
+  lastPendingIds: null,
   agentStatus: {},
   flowRunId: null,
   artifactRunId: null,
@@ -27,6 +31,7 @@ const state = {
   evolution: null,
   evolutionEvents: [],
   activeTab: "overview",
+  flowZoom: 1,
   runSource: null,
   evolutionSource: null,
 };
@@ -43,14 +48,20 @@ function escapeHtml(value) {
 }
 
 async function api(path, options = {}) {
+  const token = localStorage.getItem("uiux_token") || "";
   const response = await fetch(path, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers || {}),
+    },
     ...options,
   });
   const text = await response.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
   if (!response.ok) {
+    if (response.status === 401 && !path.includes("/auth/login")) openLogin();
     const detail = data && (data.detail || data.message || data.raw) ? (data.detail || data.message || data.raw) : response.statusText;
     throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
   }
@@ -126,14 +137,22 @@ function switchTab(name) {
     if (state.evolutionId) loadEvolution(state.evolutionId, true);
     else renderEvolution();
   }
-  if (name === "settings") renderSettings();
+  if (name === "settings") { renderSettings(); loadAudit(); }
   if (name === "approvals") renderApprovals();
 }
 
 // ------------------------------------------------------------------ init
 async function init() {
   try {
-    const [health, registry, budget, pending, allApprovals, runs, target, current, evolutions, settings] = await Promise.all([
+    try {
+      state.authUser = await api("/api/auth/me");
+    } catch (error) {
+      if (String(error.message).includes("authentication")) {
+        openLogin();
+        return;
+      }
+    }
+    const [health, registry, budget, pending, allApprovals, runs, target, current, evolutions, settings, projects] = await Promise.all([
       api("/api/health"),
       api("/api/registry"),
       api("/api/budget"),
@@ -144,6 +163,7 @@ async function init() {
       api("/api/current-ui"),
       api("/api/evolve"),
       api("/api/settings"),
+      api("/api/projects"),
     ]);
     state.health = health;
     state.registry = registry;
@@ -155,6 +175,7 @@ async function init() {
     state.currentManifest = current;
     state.evolutions = evolutions.proposals || [];
     state.settings = settings;
+    state.projects = projects.projects || [];
     await loadModels(false);
     state.evolutionId = defaultEvolutionId();
     renderAll();
@@ -575,6 +596,7 @@ function renderFlow() {
     el.addEventListener("click", () => openAgentDetail(el.dataset.nodeId));
   });
   $("flow-event-count").textContent = String((state.events || []).length);
+  $("flow-canvas").style.zoom = String(state.flowZoom);
   renderFlowEvents();
   renderFlowFeed();
   if (state.activeTab === "flow") requestAnimationFrame(drawFlowEdges);
@@ -614,6 +636,14 @@ function renderFlowEvents() {
     </div>
   `).join("");
   list.scrollTop = list.scrollHeight;
+}
+
+function applyFlowZoom() {
+  const canvas = $("flow-canvas");
+  if (!canvas) return;
+  canvas.style.zoom = String(state.flowZoom);
+  $("flow-zoom-reset").textContent = `${Math.round(state.flowZoom * 100)}%`;
+  requestAnimationFrame(drawFlowEdges);
 }
 
 function drawFlowEdges() {
@@ -759,6 +789,15 @@ function renderApprovals() {
   const visible = (approval) => approval.gate === "evolution_approval" || !approval.run_id || productionRunIds.has(approval.run_id);
   const pending = (state.approvals || []).filter(visible);
   const all = (state.allApprovals || []).filter(visible);
+  const currentIds = new Set(pending.map((approval) => approval.approval_id));
+  if (state.lastPendingIds && "Notification" in window && Notification.permission === "granted") {
+    for (const approval of pending) {
+      if (!state.lastPendingIds.has(approval.approval_id)) {
+        new Notification("Dictator inbox", { body: `${approval.title}\nFrom ${approval.from_codename || approval.from_agent || "system"}` });
+      }
+    }
+  }
+  state.lastPendingIds = currentIds;
   $("approval-count").textContent = String(pending.length);
   $("approval-badge").textContent = String(pending.length);
   $("pending-approvals-count").textContent = String(pending.length);
@@ -841,7 +880,7 @@ function renderTarget() {
   `).join("");
   $("target-thumbs").innerHTML = thumbs;
   $("target-images").innerHTML = images.length ? images.map((image) => `
-    <div class="target-card" data-target-image="${escapeHtml(image.file)}">
+    <div class="target-card" data-target-image="${escapeHtml(image.file)}" data-image-id="${escapeHtml(image.image_id)}">
       <img src="/api/target-ui/image?path=${encodeURIComponent(image.file)}" alt="${escapeHtml(image.screen || "target")}" onerror="this.style.display='none'" />
       <div class="info">
         <b>${escapeHtml(image.screen || "unknown")}</b>
@@ -858,10 +897,119 @@ function renderTarget() {
     <div class="item"><div class="title">${escapeHtml(item.screen || "screen")}</div><div class="meta">${escapeHtml(item.conflict)}</div></div>
   `).join("") : `<div class="muted">No conflicts recorded. Confidence is stored per image.</div>`;
   document.querySelectorAll("[data-target-image]").forEach((el) => {
-    el.addEventListener("click", () => {
-      const file = el.dataset.targetImage;
-      openModal("Target_ui reference", file, `<img src="/api/target-ui/image?path=${encodeURIComponent(file)}" style="max-width:100%;border-radius:12px" />`);
+    el.addEventListener("click", () => openTargetAnnotator(el.dataset.targetImage, el.dataset.imageId));
+  });
+}
+
+function openTargetAnnotator(file, imageId) {
+  const imageRecord = (state.targetManifest?.images || []).find((image) => image.image_id === imageId);
+  const annotations = JSON.parse(JSON.stringify(imageRecord?.annotations || []));
+  const body = `
+    <div class="annotator">
+      <div class="row" style="margin-bottom:8px">
+        <input id="annotation-label" placeholder="Region / component label" style="flex:1;background:rgba(0,0,0,.55);color:#fff;border:1px solid var(--border);border-radius:10px;padding:8px" />
+        <button class="btn ghost small" id="annotation-clear">Clear</button>
+      </div>
+      <canvas id="annotation-canvas"></canvas>
+      <div id="annotation-list" class="list" style="margin-top:8px"></div>
+    </div>
+  `;
+  openModal("Annotate Target_ui reference", file, body, `
+    <button class="btn ghost" data-close-modal>Cancel</button>
+    <button class="btn primary" id="annotation-save">Save annotations</button>
+  `, (modal) => {
+    const canvas = modal.querySelector("#annotation-canvas");
+    const ctx = canvas.getContext("2d");
+    const img = new Image();
+    let start = null;
+    let draft = null;
+    let scaleX = 1;
+    let scaleY = 1;
+    const redraw = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      for (const ann of annotations) {
+        ctx.strokeStyle = "rgba(168,85,247,.95)";
+        ctx.lineWidth = Math.max(2, canvas.width / 400);
+        ctx.strokeRect(ann.x * canvas.width, ann.y * canvas.height, ann.w * canvas.width, ann.h * canvas.height);
+        ctx.fillStyle = "rgba(168,85,247,.95)";
+        ctx.font = `${Math.max(12, canvas.width / 50)}px sans-serif`;
+        ctx.fillText(ann.label || "region", ann.x * canvas.width + 4, ann.y * canvas.height + 18);
+      }
+      if (draft) {
+        ctx.strokeStyle = "rgba(255,255,255,.9)";
+        ctx.setLineDash([5, 4]);
+        ctx.strokeRect(draft.x, draft.y, draft.w, draft.h);
+        ctx.setLineDash([]);
+      }
+    };
+    const renderList = () => {
+      modal.querySelector("#annotation-list").innerHTML = annotations.length ? annotations.map((ann, index) => `
+        <div class="item"><div class="title">${escapeHtml(ann.label || "region")}</div><div class="meta">x ${ann.x.toFixed(2)} y ${ann.y.toFixed(2)} w ${ann.w.toFixed(2)} h ${ann.h.toFixed(2)}</div></div>
+      `).join("") : `<div class="muted">No annotations yet. Drag a rectangle on the image.</div>`;
+    };
+    const point = (event) => {
+      const rect = canvas.getBoundingClientRect();
+      return { x: (event.clientX - rect.left) * scaleX, y: (event.clientY - rect.top) * scaleY };
+    };
+    canvas.addEventListener("mousedown", (event) => {
+      const p = point(event);
+      start = p;
+      draft = { x: p.x, y: p.y, w: 0, h: 0 };
     });
+    canvas.addEventListener("mousemove", (event) => {
+      if (!start) return;
+      const p = point(event);
+      draft = { x: Math.min(start.x, p.x), y: Math.min(start.y, p.y), w: Math.abs(p.x - start.x), h: Math.abs(p.y - start.y) };
+      redraw();
+    });
+    canvas.addEventListener("mouseup", () => {
+      if (draft && draft.w > 8 && draft.h > 8) {
+        annotations.push({
+          x: draft.x / canvas.width,
+          y: draft.y / canvas.height,
+          w: draft.w / canvas.width,
+          h: draft.h / canvas.height,
+          label: modal.querySelector("#annotation-label").value.trim() || "region",
+        });
+        renderList();
+      }
+      start = null;
+      draft = null;
+      redraw();
+    });
+    modal.querySelector("#annotation-clear").addEventListener("click", () => {
+      annotations.length = 0;
+      renderList();
+      redraw();
+    });
+    modal.querySelector("#annotation-save").addEventListener("click", async () => {
+      try {
+        const saved = await api("/api/target-ui/annotations", {
+          method: "POST",
+          body: JSON.stringify({ image_id: imageId, annotations }),
+        });
+        if (imageRecord) imageRecord.annotations = saved.annotations || annotations;
+        state.targetManifest = await api("/api/target-ui");
+        renderTarget();
+        toast(`${annotations.length} annotation(s) saved.`);
+        closeModal();
+      } catch (error) {
+        toast(`Annotation save error: ${error.message}`, "error");
+      }
+    });
+    img.onload = () => {
+      const maxWidth = 760;
+      const ratio = Math.min(1, maxWidth / img.naturalWidth);
+      canvas.width = Math.round(img.naturalWidth * ratio);
+      canvas.height = Math.round(img.naturalHeight * ratio);
+      scaleX = img.naturalWidth / canvas.width;
+      scaleY = img.naturalHeight / canvas.height;
+      renderList();
+      redraw();
+    };
+    img.onerror = () => { modal.querySelector("#annotation-list").innerHTML = `<div class="muted">Could not load image.</div>`; };
+    img.src = `/api/target-ui/image?path=${encodeURIComponent(file)}`;
   });
 }
 
@@ -1254,8 +1402,12 @@ function renderEvolution() {
       id: "canary",
       label: "Canary",
       name: "Scope canary",
-      status: ["applied", "approved", "rolled_back"].includes(status) ? "completed" : "idle",
-      output: status === "rolled_back" ? "Rolled back." : "Review the next N runs on one pod/screen; rollback is available.",
+      status: record.proposal?.canary?.verdict === "pass" || status === "promoted"
+        ? "completed"
+        : (record.proposal?.canary?.verdict === "fail" ? "failed" : (["applied", "approved"].includes(status) ? "running" : "idle")),
+      output: record.proposal?.canary
+        ? `${record.proposal.canary.verdict} · ${record.proposal.canary.completed}/${record.proposal.canary.runs_observed} completed · ${record.proposal.canary.scope}`
+        : (status === "rolled_back" ? "Rolled back." : "Run a small-scope metric canary, then promote or roll back."),
     },
   ];
   $("evolution-cards").innerHTML = stageData.map((stage) => `
@@ -1295,13 +1447,17 @@ function renderEvolution() {
           <button class="btn danger small" id="evolution-reject">Reject</button>
           <button class="btn ghost small" id="evolution-dictate">Dictate</button>
         ` : ""}
-        ${["applied", "approved"].includes(status) ? `<button class="btn danger small" id="evolution-rollback">Rollback registry</button>` : ""}
+        ${["applied", "approved"].includes(status) ? `<button class="btn primary small" id="evolution-canary">Start canary</button><button class="btn danger small" id="evolution-rollback">Rollback registry</button>` : ""}
+        ${["promoted", "canary"].includes(status) ? `<button class="btn ghost small" id="evolution-promote">Promote</button><button class="btn danger small" id="evolution-rollback">Rollback registry</button>` : ""}
+        ${status === "canary_failed" ? `<button class="btn danger small" id="evolution-rollback">Rollback registry</button>` : ""}
         <button class="btn ghost small" id="evolution-stop-inline" ${terminal ? "disabled" : ""}>Stop</button>
       </div>
     `;
     $("evolution-approve")?.addEventListener("click", () => decideEvolution("approve"));
     $("evolution-reject")?.addEventListener("click", () => decideEvolution("reject"));
     $("evolution-dictate")?.addEventListener("click", openEvolutionDictate);
+    $("evolution-canary")?.addEventListener("click", runCanary);
+    $("evolution-promote")?.addEventListener("click", promoteEvolution);
     $("evolution-rollback")?.addEventListener("click", rollbackEvolution);
     $("evolution-stop-inline")?.addEventListener("click", stopEvolution);
   }
@@ -1327,6 +1483,7 @@ function openEvolutionOutput(stageId, stageData) {
     if (stageId === "evaluate") return event.type === "evolution.evaluated";
     if (stageId === "approval") return event.type === "approval.required" || event.type === "evolution.decided";
     if (stageId === "apply") return event.type === "evolution.applied";
+    if (stageId === "canary") return event.type === "evolution.canary" || event.type === "evolution.promoted" || event.type === "evolution.rolled_back";
     return false;
   });
   const body = `
@@ -1337,6 +1494,33 @@ function openEvolutionOutput(stageId, stageData) {
     <pre>${escapeHtml(JSON.stringify(state.evolution?.proposal?.proposal || {}, null, 2))}</pre>
   `;
   openModal(stage?.name || "Evolution stage", stage?.label || "", body);
+}
+
+async function runCanary() {
+  if (!state.evolutionId) return;
+  try {
+    const result = await api(`/api/evolve/${encodeURIComponent(state.evolutionId)}/canary`, {
+      method: "POST",
+      body: JSON.stringify({ scope: "one_surface", runs: 5 }),
+    });
+    toast(`Canary ${result.verdict}: ${result.completed}/${result.runs_observed} completed.`);
+    await loadEvolution(state.evolutionId, false);
+    await poll();
+  } catch (error) {
+    toast(`Canary error: ${error.message}`, "error");
+  }
+}
+
+async function promoteEvolution() {
+  if (!state.evolutionId) return;
+  try {
+    await api(`/api/evolve/${encodeURIComponent(state.evolutionId)}/promote`, { method: "POST" });
+    toast("Evolution promoted.");
+    await loadEvolution(state.evolutionId, false);
+    await poll();
+  } catch (error) {
+    toast(`Promote error: ${error.message}`, "error");
+  }
 }
 
 async function rollbackEvolution() {
@@ -1394,9 +1578,22 @@ function openEvolutionDictate() {
 }
 
 // ------------------------------------------------------------------ settings
+async function loadAudit() {
+  try {
+    state.audit = (await api("/api/audit?limit=200")).audit || [];
+    const list = $("settings-audit");
+    if (!list) return;
+    list.innerHTML = state.audit.length ? state.audit.map((entry) => `
+      <div class="item"><div class="title">${escapeHtml(entry.action)}</div><div class="meta"><span>${escapeHtml(entry.user_name)}</span><span>${escapeHtml(entry.role)}</span><span>${fmtTime(entry.created_at)}</span></div></div>
+    `).join("") : `<div class="muted">No audit entries.</div>`;
+  } catch { /* auth may hide it */ }
+}
+
 function renderSettings() {
   const s = state.settings;
   if (!s) return;
+  const projectSelect = $("project-select");
+  projectSelect.innerHTML = (state.projects || []).map((project) => `<option value="${escapeHtml(project.id)}" ${project.id === s.project_id ? "selected" : ""}>${escapeHtml(project.name)} · ${escapeHtml(project.id)}</option>`).join("");
   $("settings-project-dir").textContent = s.project_dir || "—";
   $("settings-target-dir").textContent = s.target_ui_dir || "—";
   $("settings-current-dir").textContent = s.current_ui_dir || "—";
@@ -1415,9 +1612,15 @@ function renderSettings() {
   }
   $("settings-budget").textContent = fmtNumber(s.monthly_token_budget);
   $("settings-autonomy").value = s.autonomy_level || "L2";
+  $("webhook-url").value = s.webhook_url || "";
   fillModelSelect($("settings-model"), s.model);
   fillModelSelect($("model-select"), s.model);
   fillModelSelect($("run-model"), s.model);
+  $("settings-session").innerHTML = `
+    <span>User</span><b>${escapeHtml(state.authUser?.name || "Local Dictator")}</b>
+    <span>Role</span><b>${escapeHtml(state.authUser?.role || "dictator")}</b>
+    <span>Auth</span><b>${state.authUser?.auth_enabled ? "token enabled" : "local single-user"}</b>
+  `;
   $("settings-runtime").innerHTML = `
     <span>Backend</span><b>${escapeHtml(s.backend)}</b>
     <span>Registry</span><b>${escapeHtml(s.registry_version)}</b>
@@ -1527,6 +1730,31 @@ async function searchFolders(root, kind) {
 }
 
 // ------------------------------------------------------------------ modal
+function openLogin() {
+  const body = `
+    <p class="muted">This control room is protected. Enter the API token from <code>org/users.yaml</code> or <code>UIUX_AUTH_TOKEN</code>.</p>
+    <input id="login-token" type="password" placeholder="API token" style="width:100%;background:rgba(0,0,0,.55);color:#fff;border:1px solid var(--border);border-radius:10px;padding:10px" />
+  `;
+  openModal("Dictator authentication", "Bearer token required", body, `
+    <button class="btn ghost" data-close-modal>Cancel</button>
+    <button class="btn primary" id="login-submit">Unlock</button>
+  `, (modal) => {
+    modal.querySelector("#login-submit").addEventListener("click", async () => {
+      const token = modal.querySelector("#login-token").value.trim();
+      if (!token) return;
+      try {
+        const result = await api("/api/auth/login", { method: "POST", body: JSON.stringify({ token }) });
+        localStorage.setItem("uiux_token", token);
+        state.authUser = result;
+        closeModal();
+        location.reload();
+      } catch (error) {
+        toast(`Login failed: ${error.message}`, "error");
+      }
+    });
+  });
+}
+
 function openModal(title, sub, bodyHtml, actionsHtml = `<button class="btn ghost" data-close-modal>Close</button>`, onMount = null) {
   const root = $("modal-root");
   root.innerHTML = `
@@ -1560,6 +1788,9 @@ $("flow-stop-run").addEventListener("click", () => stopRun(state.flowRunId || st
 $("open-evolution").addEventListener("click", () => switchTab("evolution"));
 $("flow-run-select").addEventListener("change", (event) => { loadRun(event.target.value, true); });
 $("flow-refresh").addEventListener("click", () => { if (state.flowRunId) loadRun(state.flowRunId, true); });
+$("flow-zoom-in").addEventListener("click", () => { state.flowZoom = Math.min(1.8, state.flowZoom + 0.1); applyFlowZoom(); });
+$("flow-zoom-out").addEventListener("click", () => { state.flowZoom = Math.max(0.5, state.flowZoom - 0.1); applyFlowZoom(); });
+$("flow-zoom-reset").addEventListener("click", () => { state.flowZoom = 1; applyFlowZoom(); });
 $("artifact-run-select").addEventListener("change", (event) => { loadArtifactsForRun(event.target.value); });
 $("contract-run-select").addEventListener("change", (event) => { if (event.target.value) loadContract(event.target.value, true); });
 $("contract-refresh").addEventListener("click", () => { if (state.contractRunId) loadContract(state.contractRunId, true); });
@@ -1607,10 +1838,54 @@ $("analyze-target").addEventListener("click", () => scanTarget(true));
 $("browse-target").addEventListener("click", () => openFolderBrowser("target"));
 $("browse-target-settings").addEventListener("click", () => openFolderBrowser("target"));
 $("browse-project").addEventListener("click", () => openFolderBrowser("project"));
+$("session-login").addEventListener("click", openLogin);
+$("logout").addEventListener("click", () => { localStorage.removeItem("uiux_token"); location.reload(); });
+$("activate-project").addEventListener("click", async () => {
+  const projectId = $("project-select").value;
+  if (!projectId) return;
+  try {
+    state.settings = await api(`/api/projects/${encodeURIComponent(projectId)}/activate`, { method: "POST" });
+    state.health = await api("/api/health");
+    state.budget = await api("/api/budget");
+    state.targetManifest = await api("/api/target-ui");
+    state.currentManifest = await api("/api/current-ui");
+    state.projects = (await api("/api/projects")).projects || [];
+    renderSettings();
+    renderTarget();
+    renderBudget();
+    renderHealth();
+    toast(`Project ${projectId} activated.`);
+  } catch (error) {
+    toast(`Project activation error: ${error.message}`, "error");
+  }
+});
 $("browse-current").addEventListener("click", () => openFolderBrowser("current"));
 $("budget-pill").addEventListener("click", openBudgetEditor);
 $("edit-budget-settings").addEventListener("click", openBudgetEditor);
 $("settings-budget").addEventListener("click", openBudgetEditor);
+$("model-picker").addEventListener("click", () => {
+  const all = state.models?.models || [];
+  const body = `<input id="model-search" placeholder="Search 179 OpenCode models…" style="width:100%;background:rgba(0,0,0,.55);color:#fff;border:1px solid var(--border);border-radius:12px;padding:10px;margin-bottom:10px" /><div id="model-results" class="folder-list"></div>`;
+  openModal("Search models", `${all.length} models available`, body, `<button class="btn ghost" data-close-modal>Close</button>`, (modal) => {
+    const renderResults = (query) => {
+      const q = query.toLowerCase();
+      const matches = all.filter((model) => model.toLowerCase().includes(q)).slice(0, 80);
+      modal.querySelector("#model-results").innerHTML = matches.map((model) => `
+        <div class="folder-row" data-model="${escapeHtml(model)}"><span class="folder-icon">◇</span><span>${escapeHtml(model)}</span></div>
+      `).join("") || `<div class="muted">No models match.</div>`;
+      modal.querySelectorAll("[data-model]").forEach((el) => {
+        el.addEventListener("click", async () => {
+          closeModal();
+          await saveSettings({ model: el.dataset.model });
+          toast(`Model set to ${el.dataset.model}.`);
+        });
+      });
+    };
+    renderResults("");
+    modal.querySelector("#model-search").addEventListener("input", (event) => renderResults(event.target.value));
+    modal.querySelector("#model-search").focus();
+  });
+});
 $("test-model").addEventListener("click", async () => {
   const model = $("model-select").value;
   if (!model) { toast("Select a model first.", "error"); return; }
@@ -1630,6 +1905,12 @@ $("refresh-models").addEventListener("click", async () => { await loadModels(tru
 $("model-select").addEventListener("change", async (event) => { await saveSettings({ model: event.target.value }); });
 $("settings-model").addEventListener("change", async (event) => { await saveSettings({ model: event.target.value }); });
 $("settings-autonomy").addEventListener("change", async (event) => { await saveSettings({ autonomy_level: event.target.value }); });
+$("save-webhook").addEventListener("click", async () => { await saveSettings({ webhook_url: $("webhook-url").value.trim() }); });
+$("enable-notifications").addEventListener("click", async () => {
+  if (!("Notification" in window)) { toast("Browser notifications are not supported.", "error"); return; }
+  const permission = await Notification.requestPermission();
+  toast(permission === "granted" ? "Browser notifications enabled." : "Browser notifications not granted.", permission === "granted" ? "success" : "error");
+});
 $("evolve-btn").addEventListener("click", () => {
   const status = state.evolution?.proposal?.status || "";
   const active = state.evolutionId && !["applied", "rejected", "stopped"].includes(status);

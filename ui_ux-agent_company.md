@@ -524,7 +524,11 @@ target_ui:
 - If Current UI is empty, Visual QA posts an instruction to the Quality Lead; audit and regression evidence are limited until screenshots are captured.
 - Project validation checks for Gradle, AndroidManifest, Compose, design tokens, and both UI folders. Invalid projects are warned, not silently accepted.
 
-### 7.6 Legal and ethical policy
+### 7.6 Annotation editor
+
+Target images can be annotated with rectangles and component/region labels. Annotations are stored on the manifest image and passed to the Target_ui Analyst as authoritative region hints. This is human guidance layered on top of vision extraction, not a replacement for it.
+
+### 7.7 Legal and ethical policy
 
 - Competitor and third-party images are **reference only**.
 - Extract structure, hierarchy, and interaction patterns. Do not copy logos, proprietary illustrations, exact color systems, fonts, or copy.
@@ -624,6 +628,10 @@ flowchart LR
 | Budget caps | Audit log retention |
 | Pod composition | Legal/compliance constraints |
 | Tool allowlist | Production secrets policy |
+
+### 8.5.1 Metric canary and rollback
+
+After a safe registry change is applied, the Evolution tab can run a small-scope metric canary over recent production runs. It records completed/escalated/failed counts, pass rate, scope, and verdict. A pass promotes the change; a fail exposes rollback. This is a metric heuristic, not a full LangSmith golden-task shadow eval.
 
 ### 8.6 Registry versioning
 
@@ -760,13 +768,13 @@ A dependency-free SPA served by FastAPI:
 The SPA uses a narrow left icon rail (labels on hover) and tabs:
 
 - **Overview** — decree composer, recent runs, live timeline, compact org summary, quick approvals, token budget, quick artifacts, Target_ui mini-preview, evolution quick list.
-- **Live Flow** — full-page hierarchical graph with CEO/Chief/tier leads/specialists, codenames A1–A36, idle/running/completed/error/waiting icons, current work labels, thin colored signal lines, company feed, live SSE events, and click-through agent detail.
-- **Approvals** — source agent/codename, due time, approve/reject/dictate, decision history.
+- **Live Flow** — full-page hierarchical graph with CEO/Chief/tier leads/specialists, codenames A1–A36, idle/running/completed/error/waiting icons, current work labels, thin colored signal lines, company feed, live SSE events, zoom controls, and click-through agent detail.
+- **Approvals** — source agent/codename, due time, overdue badge, approve/reject/dictate, decision history.
 - **Artifacts** — run selector, artifact list, JSON/text/image preview, screenshot upload, and Re-run QA (reuses the existing run; no design rerun).
 - **Contract** — versioned design-contract editor with Save version and Re-run critique.
-- **Target_ui** — target + current-UI browse, recursive folder search, scan, scan + vision analysis, image grid, confidence, conflicts.
-- **Evolution** — start/stop audit, live Observe → Diagnose → Evaluate → Approve → Apply → Canary cards, agent output modals, proposal detail, Approve / Reject / Dictate, and registry rollback.
-- **Settings** — project directory browse + Gradle/Manifest/Compose/token validation, Current UI directory, Target_ui directory, OpenCode model selector (all `opencode models`), model test, editable monthly token budget, autonomy level, runtime info, and mock/demo data purge.
+- **Target_ui** — target + current-UI browse, recursive folder search, scan, scan + vision analysis, image grid, confidence, conflicts, and rectangle annotation editor.
+- **Evolution** — start/stop audit, live Observe → Diagnose → Evaluate → Approve → Apply → Canary cards, agent output modals, proposal detail, Approve / Reject / Dictate, metric canary, promote, and registry rollback.
+- **Settings** — active project switcher, project/current UI/Target_ui browse + Gradle/Manifest/Compose/token validation, searchable OpenCode model picker + model test, editable monthly token budget, autonomy level, webhook/browser notifications, token RBAC session, audit log, runtime info, and mock/demo data purge.
 
 Production defaults:
 
@@ -786,12 +794,18 @@ Production defaults:
 Replace the SPA with Next.js + React Flow when multi-user/RBAC is needed. Keep the API contract:
 
 - `GET /api/health`
+- `GET /api/auth/me`
+- `POST /api/auth/login`
+- `GET /api/audit`
 - `GET /api/registry`
 - `GET /api/project`
+- `GET /api/projects`
+- `POST /api/projects/{id}/activate`
 - `GET /api/models`
 - `GET /api/budget`
 - `GET /api/target-ui`
 - `POST /api/target-ui/scan`
+- `POST /api/target-ui/annotations`
 - `GET /api/target-ui/image?path=...`
 - `GET /api/current-ui`
 - `POST /api/current-ui/scan`
@@ -808,13 +822,23 @@ Replace the SPA with Next.js + React Flow when multi-user/RBAC is needed. Keep t
 - `GET /api/artifacts/{run_id}/{name}`
 - `POST /api/runs/{run_id}/screenshots`
 - `POST /api/runs/{run_id}/stop`
+- `POST /api/runs/{run_id}/recheck-qa`
+- `POST /api/runs/{run_id}/agent-task`
+- `GET /api/runs/{run_id}/design-contract`
+- `PUT /api/runs/{run_id}/design-contract`
+- `POST /api/runs/{run_id}/recritique`
 - `POST /api/runs/{run_id}/approve`
 - `GET /api/approvals`
 - `POST /api/approvals/{approval_id}/decide`
 - `POST /api/evolve`
 - `GET /api/evolve`
 - `GET /api/evolve/{proposal_id}`
+- `GET /api/evolve/{proposal_id}/events` (SSE)
 - `POST /api/evolve/{proposal_id}/approve`
+- `POST /api/evolve/{proposal_id}/stop`
+- `POST /api/evolve/{proposal_id}/canary`
+- `POST /api/evolve/{proposal_id}/promote`
+- `POST /api/evolve/{proposal_id}/rollback`
 
 ### 11.3 Authorization
 
@@ -890,6 +914,19 @@ artifacts/
 - **Object store / Git LFS** = large images, screenshots, target images.
 - **LangSmith** = traces, datasets, experiments, annotation.
 - **Mermaid source** = diagrams; generated SVG/PNG are build outputs, never edited.
+
+### 13.1.1 Production adapters
+
+- **LangGraph checkpoints:** set `UIUX_CHECKPOINT_BACKEND=postgres` and `UIUX_POSTGRES_DSN=...`; `AsyncPostgresSaver` is used. SQLite remains the local fallback.
+- **Artifacts:** local files remain authoritative for the UI; when `UIUX_S3_BUCKET` is set, artifacts are mirrored to S3/MinIO and the artifact metadata records the `s3_uri`.
+- **Docker Compose:** `docker compose up -d postgres minio` starts Postgres 16 and MinIO. The `app` profile is available for containerized deployment but requires OpenCode/provider access.
+- **App metadata:** runs/events/approvals/token ledger still use SQLite in this build; a full Postgres metadata migration is the next production step.
+
+### 13.1.2 Multi-project
+
+- Project profiles live in `org/projects/<id>.yaml`.
+- The Settings tab can activate a profile; it switches repo, Target_ui/current-UI paths, design system, and validation.
+- Runs keep their historical state. Per-project budget isolation and simultaneous project execution are later steps.
 
 ### 13.2 Why not an image?
 
@@ -1037,6 +1074,16 @@ Agents read target images, web research, user content, code, tool output, and po
 - **Audit log** for approvals, registry changes, and releases.
 - **Legal/IP review** for target-derived designs.
 - **Trust & Safety review** for social surfaces.
+
+---
+
+### 16.4 Auth, RBAC, and audit
+
+- Token auth is optional via `UIUX_AUTH=true` and `org/users.yaml` (copy the example).
+- Roles: **viewer** (read-only), **engineer** (run/stop/QA/agent dispatch), **design_lead** (contract/target edits), **dictator** (approvals, settings, projects, evolution, admin).
+- Mutating requests are role-gated in middleware and written to `audit_log`.
+- The UI prompts for a token on 401 and exposes session/audit in Settings.
+- OIDC/SSO is the next production step; token RBAC is the local-first implementation.
 
 ---
 

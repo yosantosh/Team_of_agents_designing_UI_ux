@@ -74,6 +74,7 @@ class Settings:
     opencode_cwd: Path = PROJECT_ROOT
     max_context_chars: int = 120000
     project_dir: Path | None = None
+    project_id: str = "dhunchat"
 
     autonomy_level: str = "L2"
     auto_approve: bool = True
@@ -87,6 +88,17 @@ class Settings:
 
     host: str = "127.0.0.1"
     port: int = 8765
+    webhook_url: str = ""
+    auth_enabled: bool = False
+    auth_token: str = ""
+    auth_role: str = "dictator"
+    checkpoint_backend: str = "sqlite"       # sqlite | postgres
+    postgres_dsn: str = ""
+    s3_bucket: str = ""
+    s3_endpoint: str = ""
+    s3_access_key: str = ""
+    s3_secret_key: str = ""
+    s3_region: str = "us-east-1"
     durable_checkpoints: bool = True
 
     @classmethod
@@ -105,6 +117,7 @@ class Settings:
             checkpoint_db=_path("UIUX_CHECKPOINT_DB", runtime_dir / "checkpoints.sqlite3", root),
             registry_path=_path("UIUX_REGISTRY", org_dir / "architecture_registry.yaml", root),
             profile_path=_path("UIUX_PROFILE", org_dir / "project_profile.yaml", root),
+            project_id=os.getenv("UIUX_PROJECT_ID", "dhunchat"),
             budget_path=_path("UIUX_BUDGET", org_dir / "budget_policy.yaml", root),
             registry_schema_path=_path("UIUX_REGISTRY_SCHEMA", org_dir / "schemas" / "registry.schema.json", root),
             target_ui_path=_path("UIUX_TARGET_UI_PATH", root / "target_ui_example", root),
@@ -127,10 +140,24 @@ class Settings:
             token_hard_stop_pct=_int("UIUX_TOKEN_HARD_STOP_PCT", 100),
             host=os.getenv("UIUX_HOST", "127.0.0.1"),
             port=_int("UIUX_PORT", 8765),
+            webhook_url=os.getenv("UIUX_WEBHOOK_URL", ""),
+            auth_enabled=_bool("UIUX_AUTH", False),
+            auth_token=os.getenv("UIUX_AUTH_TOKEN", ""),
+            auth_role=os.getenv("UIUX_AUTH_ROLE", "dictator"),
+            checkpoint_backend=os.getenv("UIUX_CHECKPOINT_BACKEND", "sqlite").strip().lower(),
+            postgres_dsn=os.getenv("UIUX_POSTGRES_DSN", ""),
+            s3_bucket=os.getenv("UIUX_S3_BUCKET", ""),
+            s3_endpoint=os.getenv("UIUX_S3_ENDPOINT", ""),
+            s3_access_key=os.getenv("UIUX_S3_ACCESS_KEY", ""),
+            s3_secret_key=os.getenv("UIUX_S3_SECRET_KEY", ""),
+            s3_region=os.getenv("UIUX_S3_REGION", "us-east-1"),
             durable_checkpoints=_bool("UIUX_DURABLE_CHECKPOINTS", True),
         )
         settings.ensure_dirs()
         load_runtime_settings(settings)
+        project_profile = settings.org_dir / "projects" / f"{settings.project_id}.yaml"
+        if project_profile.exists():
+            settings.profile_path = project_profile
         return settings
 
     def ensure_dirs(self) -> None:
@@ -197,6 +224,13 @@ def load_runtime_settings(settings: Settings) -> dict[str, Any]:
             settings.current_ui_path = resolved
     if data.get("autonomy_level"):
         settings.autonomy_level = str(data["autonomy_level"])
+    if data.get("webhook_url"):
+        settings.webhook_url = str(data["webhook_url"])
+    if data.get("project_id"):
+        settings.project_id = str(data["project_id"])
+        candidate = settings.org_dir / "projects" / f"{settings.project_id}.yaml"
+        if candidate.exists():
+            settings.profile_path = candidate
     return data
 
 
@@ -231,6 +265,12 @@ def save_runtime_settings(settings: Settings, **updates: Any) -> dict[str, Any]:
         elif key == "autonomy_level":
             data["autonomy_level"] = str(value)
             settings.autonomy_level = str(value)
+        elif key == "webhook_url":
+            data["webhook_url"] = str(value)
+            settings.webhook_url = str(value)
+        elif key == "project_id":
+            data["project_id"] = str(value)
+            settings.project_id = str(value)
         else:
             data[key] = value
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")

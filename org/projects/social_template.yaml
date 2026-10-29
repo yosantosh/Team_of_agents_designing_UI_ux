@@ -1,0 +1,175 @@
+# Project profile — binds the common company constitution to one product.
+# The company can serve many projects; this file is the per-project adapter.
+
+project:
+  name: "Dhunchat / Orphic"
+  repo: "/home/pluto/main_projects/Orphic"
+  package: "com.example.dhunchat"
+  app_name: "dhunchat"
+  archetype: "hybrid_proximity_social"   # instagram_visual | x_realtime_text | hybrid_proximity_social
+  description: "A social music app with feed, profiles, messaging, rooms, player, and proximity discovery."
+  min_sdk: 24
+  compile_sdk: 36
+  target_sdk: 36
+  ui_stack: "Kotlin + Jetpack Compose + Material 3"
+  architecture: "MVVM / unidirectional state + Hilt"
+  module: "OrphicApp/"
+  branch: "main"
+  package_manager: "gradle"
+  ci: "GitHub Actions"
+
+design_system:
+  source_of_truth: "spec_first"          # spec_first | figma_first | hybrid
+  tokens_path: "OrphicApp/app/src/main/java/com/example/dhunchat/theme/DhunchatDesignTokens.kt"
+  spec_path: "docs/dhunchat_android_liquid_glass_ui_ux_plan.md"
+  baseline_path: "docs/ui_ux_refinment_plan.md"
+  orchestration_contract: "UI_UX_AGENTS.md"
+  figma:
+    enabled: false
+    role: "optional_collaboration_and_export"  # optional | primary
+    note: "Add a FigmaAdapter later for frame import/export, variables/styles, and critique comments. Not a runtime dependency."
+
+current_ui:
+  mode: "auto"                           # auto | required | off
+  path: "docs/screenshots_of_current_ui"
+  candidate_paths:
+    - "docs/screenshots_of_current_ui"
+    - "docs/current_ui"
+    - "current_ui_example"
+  manifest: "artifacts/current_ui/manifest.json"
+  search_patterns: ["current_ui", "current-ui", "screenshots_of_current_ui", "current_screens"]
+  note: "Current UI is the visual-regression / audit baseline, not the design target."
+
+target_ui:
+  mode: "auto"                           # auto | required | off
+  path: "docs/target_ui"
+  candidate_paths:
+    - "docs/target_ui"
+    - "target_ui_example"
+    - "/home/pluto/Documents/Target_ui"
+  manifest: "artifacts/target_ui/manifest.json"
+  precedence: "tiered"                   # tiered | pixel_perfect | inspiration
+  fidelity: "exact"                      # exact | close | inspiration
+  confidence_threshold: 0.80
+  on_conflict: "escalate"
+  max_images_per_run: 8
+  analyze_with_vision: true
+  rights_policy: "Use competitor/target images for layout and hierarchy reference only. Replace brand assets, fonts, icons, and copy. Run legal/IP review before release."
+
+visual_qa:
+  backend: "emulator_adb"                # emulator_adb | gradle_managed_devices | firebase_test_lab | manual_upload
+  roborazzi: false                       # explicitly removed
+  capture_adapter: "ScreenCaptureAdapter"
+  primary_capture: "deterministic emulator/Waydroid harness; adb exec-out screencap; UiAutomator idle waits"
+  diff_stack: "Pillow MVP; OpenCV/SSIM + OCR + color/contrast in production"
+  baseline_dir: "artifacts/visual/baselines"
+  screenshots_dir: "artifacts/visual/screenshots"
+  device_matrix:
+    - id: compact_360dp
+      width_dp: 360
+      density: 3
+      font_scale: 1.0
+      locale: "en-US"
+    - id: large_412dp
+      width_dp: 412
+      density: 2.625
+      font_scale: 1.0
+      locale: "en-US"
+    - id: large_font_200
+      width_dp: 360
+      density: 3
+      font_scale: 2.0
+      locale: "en-US"
+    - id: rtl_ar
+      width_dp: 360
+      density: 3
+      font_scale: 1.0
+      locale: "ar"
+  states:
+    - default
+    - loading
+    - empty
+    - error
+    - offline
+    - partial_error
+    - long_text
+    - deleted_content
+    - permission_denied
+
+android_quality:
+  min_touch_target_dp: 48
+  min_contrast_ratio: 4.5
+  large_text_contrast_ratio: 3.0
+  max_font_scale: 2.0
+  edge_to_edge: true
+  predictive_back: true
+  rtl_required: true
+  dark_theme_required: true
+  light_theme_required: false
+  performance_budgets:
+    cold_start_ms: 1200
+    jank_pct: 1.0
+    apk_size_mb: 40
+    memory_mb: 250
+
+autonomy:
+  level: "L2"                            # L0 | L1 | L2 | L3 | L4
+  ceo_agent: "ceo"
+  governance:
+    L0: "human_ceo"                      # Human is CEO + Dictator; CEO agent advises
+    L1: "human_ceo"
+    L2: "human_ceo"
+    L3: "shared_ceo"                     # CEO agent operates; major decisions to Human
+    L4: "agent_ceo"                      # CEO agent runs; Human is Dictator only
+  human_design_gate: true
+  human_release_gate: true
+  auto_merge_low_risk: false
+  max_rework: 2
+  require_evidence_for_release: true
+  allow_unverified_release: false
+  promotion_criteria:
+    L2_to_L3:
+      min_completed_runs: 20
+      max_critical_escapes: 0
+      min_first_pass_yield: 0.60
+      human_spot_check_rate: 0.20
+
+budget:
+  policy_path: "org/budget_policy.yaml"
+  monthly_total_tokens: 100000000          # PLACEHOLDER — set the Dictator's ceiling
+  currency: "USD"
+
+model_policy:
+  backend: "opencode"                      # opencode | mock
+  aliases:
+    reasoner: "reasoner"
+    vision: "vision"
+    coder: "coder"
+    critic: "critic"
+    cheap: "cheap"
+  fallback_order:
+    - "modal/deepseek-v4.1-flash-1017"
+    - "opencode/gemini-3.8-flash"
+    - "opencode/flint-40b-free"
+  note: "Verify exact model availability with `opencode models`. Do not hardcode unverified IDs in production."
+
+security:
+  sandbox: "docker_or_git_worktree"
+  production_secrets_in_agents: false
+  network_egress: "allowlist"
+  prompt_injection_defense: "untrusted_content_wrapping + tool_least_privilege + artifact_signing"
+  pii_redaction: true
+  audit_log: true
+  kill_switch: true
+
+release:
+  strategy: "staged_rollout"
+  stages: [1, 5, 25, 100]
+  feature_flags: true
+  rollback_plan_required: true
+  monitoring:
+    - crash_free_rate
+    - anr_rate
+    - startup_time
+    - jank
+    - play_vitals

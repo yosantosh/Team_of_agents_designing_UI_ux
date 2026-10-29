@@ -18,6 +18,7 @@
     <div class="top-actions">
       <button class="pill clickable" id="budget-pill" title="Click to edit monthly token budget">Budget —</button>
       <select id="model-select" class="model-select" title="OpenCode model for new runs"></select>
+      <button class="btn ghost small" id="model-picker" title="Search all models">⌕</button>
       <button class="btn ghost small" id="test-model" title="Ask the selected model who it is">Test</button>
       <button class="btn primary" id="evolve-btn">✦ Evolve / Improve</button>
     </div>
@@ -151,6 +152,9 @@
         <div class="row">
           <select id="flow-run-select" class="wide-select"></select>
           <button class="btn ghost small" id="flow-refresh">Refresh</button>
+          <button class="btn ghost small" id="flow-zoom-out">−</button>
+          <button class="btn ghost small" id="flow-zoom-reset">100%</button>
+          <button class="btn ghost small" id="flow-zoom-in">+</button>
           <button class="btn danger small" id="flow-stop-run" disabled>■ Stop</button>
         </div>
       </div>
@@ -295,6 +299,11 @@
     <section id="tab-settings" class="tab-panel">
       <div class="settings-grid">
         <div class="card">
+          <div class="card-head"><h2>Active project</h2><button class="btn ghost small" id="activate-project">Activate</button></div>
+          <select id="project-select" class="wide-select"></select>
+          <p class="hint">Switches the active project profile: repo, Target_ui, current UI, design system, and validation. Runs remain historical.</p>
+        </div>
+        <div class="card">
           <div class="card-head"><h2>Project directory</h2><button class="btn ghost small" id="browse-project">Browse</button></div>
           <div class="path-display" id="settings-project-dir">—</div>
           <div id="settings-project-validation" class="validation"></div>
@@ -330,6 +339,22 @@
             <option value="L4">L4 — auto-release within policy</option>
           </select>
           <p class="hint">L2 is the production launch default. L4 is a research goal, not a starting point.</p>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Notifications</h2><button class="btn ghost small" id="enable-notifications">Enable browser alerts</button></div>
+          <label class="muted" style="display:block;margin-bottom:6px">Webhook URL for approvals / failures</label>
+          <input id="webhook-url" placeholder="https://example.com/hook" style="width:100%;background:rgba(0,0,0,.55);color:#fff;border:1px solid var(--border);border-radius:10px;padding:9px" />
+          <button class="btn ghost small" id="save-webhook" style="margin-top:8px">Save webhook</button>
+          <p class="hint">Webhook receives a JSON body with title, message, run id, and event data.</p>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Session & audit</h2><button class="btn ghost small" id="session-login">Set API token</button></div>
+          <div class="kv" id="settings-session"></div>
+          <button class="btn ghost small" id="logout" style="margin-top:8px">Clear token</button>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Audit log</h2></div>
+          <div id="settings-audit" class="list scroll" style="max-height:220px"></div>
         </div>
         <div class="card">
           <div class="card-head"><h2>Runtime</h2></div>

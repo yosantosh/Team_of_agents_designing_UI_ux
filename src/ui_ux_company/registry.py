@@ -418,6 +418,29 @@ def load_profile(settings: Settings) -> ProjectProfile:
     return ProjectProfile(load_yaml(settings.profile_path), settings.profile_path)
 
 
+def list_projects(settings: Settings) -> list[dict[str, Any]]:
+    directory = settings.org_dir / "projects"
+    if not directory.exists():
+        return []
+    projects = []
+    for path in sorted(directory.glob("*.yaml")):
+        try:
+            data = load_yaml(path)
+        except Exception:
+            continue
+        project = data.get("project", {})
+        projects.append(
+            {
+                "id": path.stem,
+                "name": project.get("name", path.stem),
+                "repo": project.get("repo"),
+                "package": project.get("package"),
+                "path": str(path),
+            }
+        )
+    return projects
+
+
 def load_budget(settings: Settings) -> BudgetPolicy:
     return BudgetPolicy(load_yaml(settings.budget_path), settings.budget_path)
 

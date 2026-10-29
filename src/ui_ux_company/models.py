@@ -101,6 +101,7 @@ class TargetImage(FlexModel):
     status: Literal["unanalyzed", "analyzed", "low_confidence", "conflict", "approved"] = "unanalyzed"
     confidence: float = 0.0
     extracted: dict[str, Any] = Field(default_factory=dict)
+    annotations: list[dict[str, Any]] = Field(default_factory=list)
     conflicts: list[str] = Field(default_factory=list)
     rights: str = "reference_only"
 

@@ -59,6 +59,16 @@ CREATE TABLE IF NOT EXISTS approvals (
   decided_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status, created_at);
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_name TEXT,
+  role TEXT,
+  action TEXT,
+  method TEXT,
+  path TEXT,
+  status INTEGER,
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS agent_messages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   run_id TEXT NOT NULL,
@@ -359,6 +369,24 @@ class Storage:
         if not rows:
             return None
         return self.get_approval(rows[0]["approval_id"])
+
+    # ---------------------------------------------------------------- audit
+    def add_audit(
+        self,
+        user_name: str,
+        role: str,
+        action: str,
+        method: str,
+        path: str,
+        status: int,
+    ) -> None:
+        self._execute(
+            "INSERT INTO audit_log(user_name,role,action,method,path,status,created_at) VALUES(?,?,?,?,?,?,?)",
+            (user_name, role, action, method, path, status, utcnow()),
+        )
+
+    def list_audit(self, limit: int = 200) -> list[dict[str, Any]]:
+        return self._query("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,))
 
     # ---------------------------------------------------------- agent feed
     def add_agent_message(

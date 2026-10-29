@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -18,14 +18,16 @@ from pydantic import BaseModel
 
 from .agents import AgentRunner
 from .artifacts import ArtifactStore
+from .auth import AuthService
 from .config import Settings, save_runtime_settings
 from .events import EventBus
 from .evolution import EvolutionEngine
 from .gateway import ModelGateway
 from .graph import CompanyGraph
 from .models import ApprovalDecision, EvolutionRequest, RunRequest, new_id
+from .notifications import Notifier
 from .project_validation import validate_android_project
-from .registry import load_budget, load_profile, load_registry
+from .registry import list_projects, load_budget, load_profile, load_registry, load_yaml
 from .storage import Storage
 from .target_ui import (
     analyze_manifest,
@@ -43,6 +45,11 @@ class TargetScanRequest(BaseModel):
     analyze: bool = True
 
 
+class TargetAnnotationRequest(BaseModel):
+    image_id: str
+    annotations: list[dict[str, Any]] = []
+
+
 class SettingsUpdate(BaseModel):
     model: str | None = None
     monthly_token_budget: int | None = None
@@ -50,6 +57,7 @@ class SettingsUpdate(BaseModel):
     target_ui_dir: str | None = None
     current_ui_dir: str | None = None
     autonomy_level: str | None = None
+    webhook_url: str | None = None
 
 
 class ModelTestRequest(BaseModel):
@@ -58,6 +66,22 @@ class ModelTestRequest(BaseModel):
 
 class DesignContractUpdate(BaseModel):
     contract: dict[str, Any]
+
+
+class CanaryRequest(BaseModel):
+    scope: str = "one_surface"
+    runs: int = 5
+
+
+class AuthLogin(BaseModel):
+    token: str
+
+
+class AgentTaskRequest(BaseModel):
+    agent_id: str
+    goal: str
+    context: dict[str, Any] = {}
+    artifact_name: str | None = None
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -70,7 +94,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if settings.model_override:
         settings.opencode_model = settings.model_override
     storage = Storage(settings.storage_db)
-    bus = EventBus(storage)
+    bus = EventBus(storage, Notifier(settings))
     artifacts = ArtifactStore(settings, storage)
     gateway = ModelGateway(settings, registry, storage)
     agents = AgentRunner(gateway, registry)
@@ -130,6 +154,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.opencode_models_cache: dict[str, Any] | None = None
     app.state.opencode_models_cached_at: float = 0.0
     app.state.project_validation_cache: dict[str, Any] = {}
+    auth = AuthService(settings)
+    app.state.auth = auth
+
+    @app.middleware("http")
+    async def auth_middleware(request: Request, call_next):
+        path = request.url.path
+        exempt = (
+            path in {"/", "/api/health", "/api/auth/login"}
+            or path.startswith("/static/")
+            or path.startswith("/docs")
+            or path.startswith("/openapi")
+            or path.startswith("/redoc")
+        )
+        user = auth.authenticate(None)
+        if not exempt and auth.enabled:
+            header = request.headers.get("authorization", "")
+            token = header[7:].strip() if header.lower().startswith("bearer ") else request.headers.get("x-api-key")
+            user = auth.authenticate(token)
+            if user is None:
+                return JSONResponse({"detail": "authentication required"}, status_code=401)
+            if not auth.can_write(user, request.method, path):
+                return JSONResponse({"detail": "forbidden for this role"}, status_code=403)
+        request.state.user = user
+        response = await call_next(request)
+        if request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"} and not exempt:
+            actor = getattr(request.state, "user", None)
+            storage.add_audit(
+                getattr(actor, "name", "Local Dictator") if actor else "anonymous",
+                getattr(actor, "role", "none") if actor else "none",
+                f"{request.method.upper()} {path}",
+                request.method,
+                path,
+                response.status_code,
+            )
+        return response
 
     static_dir = Path(__file__).parent / "static"
     if static_dir.exists():
@@ -180,6 +239,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "roborezzi": False,
             "visual_qa_backend": profile.visual_qa.get("backend", "emulator_adb"),
         }
+
+    @app.post("/api/auth/login")
+    async def auth_login(request: AuthLogin):
+        user = auth.authenticate(request.token)
+        if user is None:
+            raise HTTPException(status_code=401, detail="invalid token")
+        return {"name": user.name, "role": user.role, "auth_enabled": auth.enabled}
+
+    @app.get("/api/auth/me")
+    async def auth_me(request: Request):
+        user = getattr(request.state, "user", None)
+        if user is None:
+            if not auth.enabled:
+                return {"name": "Local Dictator", "role": "dictator", "auth_enabled": False}
+            raise HTTPException(status_code=401, detail="authentication required")
+        return {"name": user.name, "role": user.role, "auth_enabled": auth.enabled}
+
+    @app.get("/api/audit")
+    async def get_audit(limit: int = 200):
+        return {"audit": storage.list_audit(limit)}
 
     @app.get("/api/registry")
     async def get_registry():
@@ -238,6 +317,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/settings")
     async def get_settings():
         return {
+            "project_id": settings.project_id,
             "project_dir": _effective_project_dir(),
             "target_ui_dir": str(settings.target_ui_path),
             "current_ui_dir": str(settings.current_ui_path),
@@ -246,6 +326,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "autonomy_level": settings.autonomy_level,
             "governance": profile.autonomy.get("governance", {}),
             "backend": settings.model_backend,
+            "webhook_url": settings.webhook_url,
             "registry_version": registry.version,
             "project_validation": _project_validation(),
         }
@@ -298,6 +379,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(status_code=400, detail="autonomy_level must be L0..L4")
             settings.autonomy_level = request.autonomy_level
             updates["autonomy_level"] = request.autonomy_level
+        if request.webhook_url is not None:
+            settings.webhook_url = request.webhook_url
+            updates["webhook_url"] = request.webhook_url
         if updates:
             save_runtime_settings(settings, **updates)
         return await get_settings()
@@ -420,6 +504,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="image not found")
         return FileResponse(safe)
 
+    @app.post("/api/target-ui/annotations")
+    async def save_target_annotations(request: TargetAnnotationRequest):
+        manifest = load_manifest(settings, profile)
+        image = next((item for item in manifest.images if item.image_id == request.image_id), None)
+        if image is None:
+            raise HTTPException(status_code=404, detail="target image not found")
+        image.annotations = request.annotations
+        manifest.status = "annotated"
+        save_manifest(settings, profile, manifest)
+        await bus.publish(
+            "target_ui",
+            "target_ui.annotated",
+            f"{len(request.annotations)} annotation(s) saved for {request.image_id}",
+            "dictator",
+            {"image_id": request.image_id, "annotations": request.annotations},
+        )
+        return image.model_dump()
+
     @app.get("/api/current-ui")
     async def current_ui_status():
         return load_current_manifest(settings, profile).model_dump()
@@ -477,6 +579,48 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if len(results) >= 100:
                     break
         return {"root": str(base), "patterns": pattern_list, "results": results}
+
+    @app.get("/api/projects")
+    async def get_projects():
+        return {"active": settings.project_id, "projects": list_projects(settings)}
+
+    @app.post("/api/projects/{project_id}/activate")
+    async def activate_project(project_id: str):
+        path = settings.org_dir / "projects" / f"{project_id}.yaml"
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="project profile not found")
+        data = load_yaml(path)
+        profile.data = data
+        profile.path = path
+        settings.project_id = project_id
+        settings.profile_path = path
+        repo = profile.project.get("repo")
+        if repo:
+            settings.project_dir = Path(str(repo)).expanduser()
+        target = profile.target_ui.get("path")
+        if target:
+            candidate = Path(str(target)).expanduser()
+            if not candidate.is_absolute():
+                candidate = settings.root / candidate
+            if candidate.exists():
+                settings.target_ui_path = candidate
+        current = profile.data.get("current_ui", {}).get("path")
+        if current:
+            candidate = Path(str(current)).expanduser()
+            if not candidate.is_absolute():
+                candidate = settings.root / candidate
+            if candidate.exists():
+                settings.current_ui_path = candidate
+        save_runtime_settings(
+            settings,
+            project_id=project_id,
+            project_dir=str(settings.project_dir) if settings.project_dir else None,
+            target_ui_dir=str(settings.target_ui_path),
+            current_ui_dir=str(settings.current_ui_path),
+        )
+        app.state.project_validation_cache = {}
+        await bus.publish("project", "project.activated", f"Project {project_id} activated", "dictator", {"project_id": project_id})
+        return await get_settings()
 
     @app.get("/api/project/validate")
     async def validate_project(path: str | None = None, refresh: bool = False):
@@ -602,6 +746,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if a.get("run_id") == run_id
             ],
         }
+
+    @app.post("/api/runs/{run_id}/agent-task")
+    async def dispatch_agent_task(run_id: str, request: AgentTaskRequest):
+        if not storage.get_run(run_id):
+            raise HTTPException(status_code=404, detail="run not found")
+        try:
+            return await company.run_agent_task(
+                run_id,
+                request.agent_id,
+                request.goal,
+                request.context,
+                request.artifact_name,
+            )
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/api/runs/{run_id}/messages")
     async def list_run_messages(run_id: str, after_id: int = 0):
@@ -774,6 +933,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    @app.post("/api/evolve/{proposal_id}/canary")
+    async def canary_evolution(proposal_id: str, request: CanaryRequest):
+        try:
+            return await evolution.canary(proposal_id, scope=request.scope, runs=request.runs)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/evolve/{proposal_id}/promote")
+    async def promote_evolution(proposal_id: str):
+        try:
+            return await evolution.promote(proposal_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/evolve/{proposal_id}/rollback")
     async def rollback_evolution(proposal_id: str):

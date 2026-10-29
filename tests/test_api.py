@@ -30,6 +30,15 @@ def test_api_health_and_registry(settings):
         current = client.get("/api/current-ui")
         assert current.status_code == 200
         assert "images" in current.json()
+        target = client.get("/api/target-ui").json()
+        if target.get("images"):
+            image_id = target["images"][0]["image_id"]
+            annotated = client.post(
+                "/api/target-ui/annotations",
+                json={"image_id": image_id, "annotations": [{"x": 0.1, "y": 0.1, "w": 0.2, "h": 0.2, "label": "test"}]},
+            )
+            assert annotated.status_code == 200
+            assert annotated.json()["annotations"][0]["label"] == "test"
         search = client.get("/api/fs/search", params={"root": str(settings.root), "patterns": "target_ui,current_ui"})
         assert search.status_code == 200
         assert "results" in search.json()

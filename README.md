@@ -59,7 +59,7 @@ src/ui_ux_company/
   storage.py                       # SQLite runs, events, approvals, token ledger
   artifacts.py                     # versioned artifact store
   static/                          # dependency-free control room
-tests/                             # 11 passing tests
+tests/                             # 13 passing tests
 target_ui_example/                 # generated placeholder reference image
 ui_ux-agent_company.md             # full constitution
 ```
@@ -86,13 +86,13 @@ flowchart LR
 The SPA is a narrow left icon rail plus tabs:
 
 - **Overview** — decree composer, recent runs, live timeline, compact org summary, approvals, budget, artifacts, Target_ui preview, evolution quick list.
-- **Live Flow** — full-page hierarchical graph with CEO/Chief/tier leads/specialists, codenames A1–A36, idle/running/completed/error/waiting icons, current work labels, thin colored signal lines, company feed, and click-through agent detail.
-- **Approvals** — source agent/codename, due time, approve/reject/dictate, decision history.
+- **Live Flow** — full-page hierarchical graph with CEO/Chief/tier leads/specialists, codenames A1–A36, idle/running/completed/error/waiting icons, current work labels, thin colored signal lines, company feed, zoom controls, and click-through agent detail.
+- **Approvals** — source agent/codename, due time, overdue badge, approve/reject/dictate, decision history.
 - **Artifacts** — run selector, preview, screenshot upload, Re-run QA.
 - **Contract** — versioned design-contract editor with Save version and Re-run critique.
-- **Target_ui** — target + current-UI scan, recursive folder search, confidence/conflicts.
-- **Evolution** — Observe → Diagnose → Evaluate → Approve → Apply → Canary cards, stop, approve/reject/dictate, and registry rollback.
-- **Settings** — project/current UI/Target_ui folders, all OpenCode models, model test, editable token budget, autonomy, project validation, mock-data cleanup.
+- **Target_ui** — target + current-UI scan, recursive folder search, confidence/conflicts, and a rectangle annotation editor mapped to components.
+- **Evolution** — Observe → Diagnose → Evaluate → Approve → Apply → Canary cards, stop, approve/reject/dictate, automated metric canary, promote, and registry rollback.
+- **Settings** — active project switcher, project/current UI/Target_ui folders, all OpenCode models with a searchable picker, model test, editable token budget, autonomy, project validation, webhook/browser notifications, session/RBAC, audit log, and mock-data cleanup.
 
 Hierarchy: **CEO A1 → Chief A2 → five tier leads A3–A7 → specialists A8+**. Tier leads now run real review gates before design, critique, implementation, and manager evaluation. The Chief receives a compact `company_brief` with the org chart, capabilities, gates, playbooks, and governance. A structured **company feed** records short handoffs, reviews, artifacts, feedback, escalations, and instructions — visible to the run, not a free-form chat.
 
@@ -203,6 +203,22 @@ Upload screenshots to the control room via `POST /api/runs/{run_id}/screenshots`
 - **QA re-check:** Artifacts → upload screenshots → Re-run QA. It reuses the existing run and does not redo design.
 - **Approvals:** Every pending decision shows its source agent/codename and due time. Approve / Reject / Dictate; decided cards move to Decision History.
 
+## Production infrastructure
+
+- **Projects:** `org/projects/*.yaml`; switch the active profile in Settings. Runs keep their historical state.
+- **Auth/RBAC:** copy `org/users.yaml.example` to `org/users.yaml`, set `UIUX_AUTH=true`, and log in with a token. Roles: viewer, engineer, design_lead, dictator. Mutating endpoints are role-gated and audited.
+- **Postgres checkpoints:** `docker compose up -d postgres minio`, then set:
+  ```bash
+  UIUX_CHECKPOINT_BACKEND=postgres
+  UIUX_POSTGRES_DSN=postgresql://uiux:uiux_dev_password@localhost:5432/uiux
+  UIUX_S3_BUCKET=uiux-artifacts
+  UIUX_S3_ENDPOINT=http://localhost:9000
+  UIUX_S3_ACCESS_KEY=uiux
+  UIUX_S3_SECRET_KEY=uiux_dev_password
+  ```
+  SQLite remains the fallback. Artifacts are written locally and mirrored to S3/MinIO when configured.
+- **Webhook notifications:** Settings → Notifications → webhook URL. Approval/failure events are POSTed as JSON. Browser alerts are opt-in.
+
 ## Token budget
 
 `org/budget_policy.yaml` defaults to **100,000,000 tokens/month** as a placeholder. Replace it with your actual ceiling in the dashboard or:
@@ -219,15 +235,18 @@ The dashboard shows used/remaining tokens, estimated cost, top agents, and top m
 
 ## Current limitations (honest)
 
-**Implemented in this build:** left rail, full-page flow, CEO/5 leads/codenames, real tier-lead review gates, company feed and signal lines, approval provenance/SLA, decision history, modes, model test, run stop, recursive folder search, current-UI baseline, project validation, mock-data cleanup, QA re-check after screenshot upload, design-contract editor, and evolution registry rollback.
+**Implemented in this build:** left rail, full-page flow, CEO/5 leads/codenames, real tier-lead review gates, company feed and signal lines, approval provenance/SLA/overdue, decision history, modes, model test, run stop, recursive folder search, current-UI baseline + visual diff, project validation, mock-data cleanup, QA re-check, design-contract editor, evolution rollback + metric canary, searchable model picker, flow zoom, target annotations, multi-project active switcher, token RBAC + audit log, webhook/browser notifications, Postgres checkpoint support, and S3/MinIO artifact mirroring.
 
-**Still queued for later phases:**
-- Automated canary evaluation (rollback is implemented; canary card is manual-scope).
-- Multi-project switcher.
-- Auth/RBAC and audit log.
-- Postgres + MinIO object storage.
-- Target_ui annotation editor.
-- Deeper LangSmith datasets/experiments and judge calibration.
+**Still limited / queued:**
+- App metadata still uses SQLite unless migrated; Postgres currently backs LangGraph checkpoints.
+- MinIO mirroring is best-effort; local artifacts remain primary.
+- Auth is token-based RBAC, not OIDC/SSO.
+- Multi-project switch is active-profile only; no simultaneous project runs or per-project budget isolation.
+- Dynamic `add_agent` updates the registry/org chart; extra leads/specialists need a graph rebuild or generic task dispatch to execute inside the main pipeline.
+- Canary is an automated metric heuristic over recent runs, not a full LangSmith golden-task shadow eval.
+- Target annotations are rectangles with labels, not freehand regions.
+- Notifications are webhook/browser; no email.
+- Deeper LangSmith datasets/experiments and judge calibration remain.
 
 Other limitations:
 
