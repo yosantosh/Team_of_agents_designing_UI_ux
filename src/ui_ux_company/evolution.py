@@ -151,10 +151,23 @@ class EvolutionEngine:
                 "work_label": work_label("org_evolution_auditor"),
             },
         )
+        recent = self.storage.list_evolutions(12)
+        rejected = [
+            {
+                "title": item.get("title"),
+                "status": item.get("status"),
+                "problem": (item.get("proposal") or {}).get("problem"),
+                "decision": item.get("decision"),
+            }
+            for item in recent
+            if item.get("status") in {"rejected", "dismissed"}
+        ]
         result = await self.agents.run(
             "org_evolution_auditor",
             "Diagnose the biggest bottleneck in the agent company and propose one controlled, measurable evolution. "
-            "You cannot approve or apply it. Prefer low-risk changes with a shadow eval and rollback plan.",
+            "You cannot approve or apply it. Prefer low-risk changes with a shadow eval and rollback plan. "
+            "Do not resubmit the same change class that the Dictator already rejected unless there is genuinely new evidence; "
+            "if the root cause is blocked, propose the next best intervention or ask the Dictator for a decision.",
             {
                 "focus": state.get("focus", "quality"),
                 "metrics": state.get("metrics", {}),
@@ -162,6 +175,7 @@ class EvolutionEngine:
                 "enabled_agents": self.registry.enabled_agent_ids(),
                 "immutable": self.registry.data.get("evolution_policy", {}).get("immutable", []),
                 "mutable": self.registry.data.get("evolution_policy", {}).get("mutable", []),
+                "rejected_proposals": rejected,
             },
             run_id=state["proposal_id"],
             task_id="org_evolution",

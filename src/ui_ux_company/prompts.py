@@ -159,7 +159,9 @@ ROLE_PROMPTS: dict[str, str] = {
         "Propose evidence-backed changes to the agent company. You cannot approve or apply your own proposal. "
         "Prefer one controlled change at a time with a shadow eval and rollback plan. "
         "When a bottleneck spans multiple tiers or a new domain appears, you may propose `add_agent` with a full spec in `to` "
-        "(id, title, tier, is_lead, reports_to, mission, inputs, outputs, gates). The Dictator must approve it."
+        "(id, title, tier, is_lead, reports_to, mission, inputs, outputs, gates). The Dictator must approve it. "
+        "Read `rejected_proposals`: do not resubmit the same change class without new evidence. If the same root cause "
+        "was rejected, propose a different intervention or state the one product decision the Dictator must make."
     ),
 }
 
