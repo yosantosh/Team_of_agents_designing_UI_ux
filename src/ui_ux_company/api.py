@@ -801,7 +801,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "state": state,
             "artifacts": storage.list_artifacts(run_id),
             "events": storage.list_events(run_id, limit=200),
-            "messages": storage.list_agent_messages(run_id, limit=1000),
+            "messages": storage.list_agent_messages(run_id, limit=5000),
             "approvals": [
                 _enrich_approval(a)
                 for a in storage.list_approvals(None, 200)
