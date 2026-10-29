@@ -60,6 +60,55 @@ class CodeWorker:
             stderr_b.decode("utf-8", errors="replace"),
         )
 
+    async def _snapshot_commit(self, repo: Path, run_id: str) -> tuple[str, str | None]:
+        """Create a temporary commit of the current working tree without touching it.
+
+        Worktree mode must start from what the human is actually looking at, including
+        tracked edits and untracked files. The snapshot exists only in the object DB;
+        the target checkout, index, and current branch are not modified.
+        """
+        head_code, head_out, head_err = await self._run(["git", "rev-parse", "--verify", "HEAD"], repo, 60)
+        if head_code != 0:
+            return "HEAD", f"target repo has no commits: {head_err[:500]}"
+        head = head_out.strip()
+        base_tree_code, base_tree_out, _ = await self._run(["git", "rev-parse", f"{head}^{{tree}}"], repo, 60)
+        if base_tree_code != 0:
+            return "HEAD", "could not read the target repo tree"
+
+        fd, index_path = tempfile.mkstemp(prefix="uiux-snapshot-index-", dir=str(self.settings.runtime_dir))
+        os.close(fd)
+        env = {"GIT_INDEX_FILE": index_path}
+        try:
+            read_code, _read_out, read_err = await self._run(["git", "read-tree", head], repo, 60, env)
+            if read_code != 0:
+                return "HEAD", f"could not snapshot the target repo: {read_err[:500]}"
+            add_code, _add_out, add_err = await self._run(["git", "add", "-A"], repo, 60, env)
+            if add_code != 0:
+                return "HEAD", f"could not snapshot the target repo: {add_err[:500]}"
+            tree_code, tree_out, tree_err = await self._run(["git", "write-tree"], repo, 60, env)
+            if tree_code != 0:
+                return "HEAD", f"could not snapshot the target repo: {tree_err[:500]}"
+            tree = tree_out.strip()
+            if tree == base_tree_out.strip():
+                return "HEAD", None
+            author = {
+                "GIT_AUTHOR_NAME": "UIUX Agent Company",
+                "GIT_AUTHOR_EMAIL": "uiux@local",
+                "GIT_COMMITTER_NAME": "UIUX Agent Company",
+                "GIT_COMMITTER_EMAIL": "uiux@local",
+            }
+            commit_code, commit_out, commit_err = await self._run(
+                ["git", "commit-tree", tree, "-p", head, "-m", f"uiux: snapshot for {run_id}"],
+                repo,
+                60,
+                {**env, **author},
+            )
+            if commit_code != 0:
+                return "HEAD", f"could not snapshot the target repo: {commit_err[:500]}"
+            return commit_out.strip(), None
+        finally:
+            Path(index_path).unlink(missing_ok=True)
+
     async def apply(
         self,
         run_id: str,
@@ -77,22 +126,18 @@ class CodeWorker:
             worktree = repo
             branch = self._git_branch(repo)
         else:
-            _dirty_code, dirty_out, _dirty_err = await self._run(["git", "status", "--porcelain"], repo, 60)
-            if dirty_out.strip():
-                return {
-                    "status": "failed",
-                    "reason": (
-                        "target repo has uncommitted changes; commit or stash them before "
-                        "worktree mode, or explicitly choose direct mode"
-                    ),
-                }
+            base, snapshot_error = await self._snapshot_commit(repo, run_id)
+            if snapshot_error:
+                return {"status": "failed", "reason": snapshot_error}
             branch = f"uiux/{run_id}"
             worktree = self.settings.runtime_dir / "worktrees" / run_id
+            await self._run(["git", "worktree", "remove", "--force", str(worktree)], repo, 60)
+            await self._run(["git", "worktree", "prune"], repo, 60)
             if worktree.exists():
                 shutil.rmtree(worktree, ignore_errors=True)
             worktree.parent.mkdir(parents=True, exist_ok=True)
             code, _out, err = await self._run(
-                ["git", "worktree", "add", "-B", branch, str(worktree), "HEAD"],
+                ["git", "worktree", "add", "-B", branch, str(worktree), base],
                 repo,
                 120,
             )

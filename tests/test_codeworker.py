@@ -94,14 +94,24 @@ def test_direct_mode_includes_untracked_files_in_patch_without_staging_real_inde
         storage.close()
 
 
-def test_worktree_worker_refuses_dirty_target(settings, tmp_path, monkeypatch):
+def test_worktree_worker_snapshots_uncommitted_target_changes(settings, tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "target")
-    (repo / "seed.txt").write_text("dirty\n", encoding="utf-8")
+    (repo / "seed.txt").write_text("dirty tracked change\n", encoding="utf-8")
+    (repo / "untracked_note.txt").write_text("local note\n", encoding="utf-8")
     worker, storage = _worker(settings, monkeypatch, _fake_opencode(tmp_path))
     try:
         result = asyncio.run(worker.apply("run_dirty", repo, "Implement", {}))
-        assert result["status"] == "failed"
-        assert "uncommitted changes" in result["reason"]
+        worktree = Path(result["worktree"])
+        assert result["status"] == "edited"
+        assert (worktree / "seed.txt").read_text(encoding="utf-8") == "dirty tracked change\n"
+        assert (worktree / "untracked_note.txt").read_text(encoding="utf-8") == "local note\n"
+        assert (worktree / "probe.txt").read_text(encoding="utf-8") == "EDITED"
+        patch = (settings.artifact_dir("run_dirty") / "code_diff.patch").read_text(encoding="utf-8")
+        assert "probe.txt" in patch
+        assert "untracked_note.txt" not in patch, "the patch should contain only the worker's changes"
+        assert (repo / "seed.txt").read_text(encoding="utf-8") == "dirty tracked change\n"
+        assert (repo / "untracked_note.txt").exists()
+        assert not (repo / "probe.txt").exists(), "the target checkout must stay untouched"
     finally:
         storage.close()
 

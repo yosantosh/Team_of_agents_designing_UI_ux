@@ -379,7 +379,7 @@
             <option value="worktree">Isolated worktree (recommended)</option>
             <option value="direct">Direct working tree (unsafe)</option>
           </select>
-          <p class="hint">Design mode never edits code. Build/Ship/Fix use the code worker after the design approval gate. Worktree mode creates a reviewable branch and diff; commit or stash target-repo changes first. Direct mode writes to the current working tree.</p>
+          <p class="hint">Design mode never edits code. Build/Ship/Fix use the code worker after the design approval gate. Worktree mode snapshots the current target working tree into an isolated branch and reviewable diff; direct mode writes to the live checkout.</p>
         </div>
         <div class="card">
           <div class="card-head"><h2>Session & audit</h2><button class="btn ghost small" id="session-login">Set API token</button></div>

@@ -246,7 +246,7 @@ Code edits happen only in `build`, `ship`, and `fix` runs. `explore`, `design`, 
 
 **Modes** (Settings → Code editing):
 
-- **Isolated worktree (default, recommended):** creates branch `uiux/<run_id>` under `.runtime/worktrees/<run_id>`, edits real project files there, commits the result, and captures a reviewable patch. The target checkout stays untouched. The target repo must be clean (commit or stash first).
+- **Isolated worktree (default, recommended):** snapshots the target's current working tree (including tracked and untracked changes), creates branch `uiux/<run_id>` under `.runtime/worktrees/<run_id>`, edits and commits there, and captures a reviewable patch. The target checkout is untouched, so uncommitted local work is preserved and included as the baseline.
 - **Direct working tree (unsafe):** edits the target checkout in place. Use only when you explicitly want that.
 
 Toggle **Allow build/ship/fix agents to edit project files** and choose the mode in Settings. The defaults can also be set with `UIUX_CODE_EDITS`, `UIUX_CODE_EDIT_MODE`, `UIUX_CODE_WORKER_AGENT`, `UIUX_CODE_WORKER_MODEL`, and `UIUX_CODE_WORKER_TIMEOUT`.
