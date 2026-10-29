@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -62,13 +64,15 @@ class Settings:
     registry_schema_path: Path = field(default_factory=lambda: PROJECT_ROOT / "org" / "schemas" / "registry.schema.json")
     target_ui_path: Path = field(default_factory=lambda: PROJECT_ROOT / "target_ui_example")
 
-    model_backend: str = "opencode"       # opencode | mock
+    model_backend: str = "opencode"       # opencode | mock (mock is test-only)
     opencode_bin: str = "opencode"
     opencode_agent: str = "uiux-worker"
     opencode_model: str = "modal/deepseek-v4.1-flash-1017"
+    model_override: str | None = None
     opencode_timeout: int = 300
     opencode_cwd: Path = PROJECT_ROOT
     max_context_chars: int = 120000
+    project_dir: Path | None = None
 
     autonomy_level: str = "L2"
     auto_approve: bool = True
@@ -107,6 +111,7 @@ class Settings:
             opencode_bin=os.getenv("UIUX_OPENCODE_BIN", "opencode"),
             opencode_agent=os.getenv("UIUX_OPENCODE_AGENT", "uiux-worker"),
             opencode_model=os.getenv("UIUX_OPENCODE_MODEL", "modal/deepseek-v4.1-flash-1017"),
+            model_override=os.getenv("UIUX_MODEL_OVERRIDE") or None,
             opencode_timeout=_int("UIUX_OPENCODE_TIMEOUT", 300),
             opencode_cwd=_path("UIUX_OPENCODE_CWD", root, root),
             max_context_chars=_int("UIUX_MAX_CONTEXT_CHARS", 120000),
@@ -123,6 +128,7 @@ class Settings:
             durable_checkpoints=_bool("UIUX_DURABLE_CHECKPOINTS", True),
         )
         settings.ensure_dirs()
+        load_runtime_settings(settings)
         return settings
 
     def ensure_dirs(self) -> None:
@@ -141,3 +147,82 @@ class Settings:
         path = self.artifacts_dir / "runs" / run_id
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    @property
+    def runtime_settings_path(self) -> Path:
+        return self.runtime_dir / "settings.json"
+
+
+def _resolve_path(raw: str | None, root: Path) -> Path | None:
+    if not raw:
+        return None
+    path = Path(str(raw)).expanduser()
+    if not path.is_absolute():
+        path = root / path
+    return path.resolve()
+
+
+def load_runtime_settings(settings: Settings) -> dict[str, Any]:
+    """Load dashboard-editable settings persisted under .runtime/settings.json."""
+    path = settings.runtime_settings_path
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    if data.get("model"):
+        settings.model_override = str(data["model"])
+        settings.opencode_model = str(data["model"])
+    if data.get("monthly_token_budget"):
+        try:
+            settings.monthly_token_budget = int(data["monthly_token_budget"])
+        except (TypeError, ValueError):
+            pass
+    if data.get("project_dir"):
+        resolved = _resolve_path(str(data["project_dir"]), settings.root)
+        if resolved:
+            settings.project_dir = resolved
+    if data.get("target_ui_dir"):
+        resolved = _resolve_path(str(data["target_ui_dir"]), settings.root)
+        if resolved:
+            settings.target_ui_path = resolved
+    if data.get("autonomy_level"):
+        settings.autonomy_level = str(data["autonomy_level"])
+    return data
+
+
+def save_runtime_settings(settings: Settings, **updates: Any) -> dict[str, Any]:
+    path = settings.runtime_settings_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data: dict[str, Any] = {}
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data = loaded
+        except (json.JSONDecodeError, OSError):
+            data = {}
+    for key, value in updates.items():
+        if value is None:
+            continue
+        if key == "target_ui_dir":
+            data["target_ui_dir"] = str(value)
+        elif key == "project_dir":
+            data["project_dir"] = str(value)
+        elif key == "model":
+            data["model"] = str(value)
+            settings.model_override = str(value)
+            settings.opencode_model = str(value)
+        elif key == "monthly_token_budget":
+            data["monthly_token_budget"] = int(value)
+            settings.monthly_token_budget = int(value)
+        elif key == "autonomy_level":
+            data["autonomy_level"] = str(value)
+            settings.autonomy_level = str(value)
+        else:
+            data[key] = value
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    return data

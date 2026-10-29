@@ -18,5 +18,14 @@ def test_api_health_and_registry(settings):
         project = client.get("/api/project")
         assert project.status_code == 200
         assert project.json()["project"]["package"] == "com.example.dhunchat"
+        settings_response = client.get("/api/settings")
+        assert settings_response.status_code == 200
+        assert settings_response.json()["backend"] == "mock"
+        assert settings_response.json()["monthly_token_budget"] > 0
+        fs = client.get("/api/fs/list", params={"path": str(settings.root)})
+        assert fs.status_code == 200
+        assert fs.json()["path"]
+        approvals = client.get("/api/approvals", params={"status": "all"})
+        assert approvals.status_code == 200
         root = client.get("/")
         assert root.status_code == 200

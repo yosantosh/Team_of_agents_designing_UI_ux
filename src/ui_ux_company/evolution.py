@@ -25,6 +25,7 @@ class EvolutionState(TypedDict, total=False):
     focus: str
     auto_approve: bool
     backend: str
+    model: str | None
     metrics: dict[str, Any]
     proposal: dict[str, Any]
     evaluation: dict[str, Any]
@@ -134,7 +135,13 @@ class EvolutionEngine:
         return {"metrics": metrics, "status": "diagnose"}
 
     async def _diagnose(self, state: EvolutionState) -> dict[str, Any]:
-        await self._event(state["proposal_id"], "agent.started", "Org evolution auditor diagnosing", "org_evolution_auditor")
+        await self._event(
+            state["proposal_id"],
+            "agent.started",
+            "Org evolution auditor diagnosing",
+            "org_evolution_auditor",
+            {"model": state.get("model") or self.settings.model_override or "registry default"},
+        )
         result = await self.agents.run(
             "org_evolution_auditor",
             "Diagnose the biggest bottleneck in the agent company and propose one controlled, measurable evolution. "
@@ -150,6 +157,7 @@ class EvolutionEngine:
             run_id=state["proposal_id"],
             task_id="org_evolution",
             backend=state.get("backend"),
+            model=state.get("model"),
         )
         proposal = dict(result.data)
         proposal.setdefault("proposal_id", state["proposal_id"])
@@ -301,20 +309,70 @@ class EvolutionEngine:
         *,
         auto_approve: bool = False,
         backend: str | None = None,
+        model: str | None = None,
+        proposal_id: str | None = None,
     ) -> dict[str, Any]:
         await self._ensure_graph()
-        proposal_id = new_id("evo")
+        proposal_id = proposal_id or new_id("evo")
         initial: EvolutionState = {
             "proposal_id": proposal_id,
             "focus": focus,
             "auto_approve": auto_approve,
             "backend": backend or self.settings.model_backend,
+            "model": model or self.settings.model_override,
             "status": "observe",
         }
         result = await self.graph.ainvoke(initial, self._config(proposal_id))
         clean = self._sanitize(dict(result))
         self.artifacts.write_json(proposal_id, "evolution_state.json", clean, created_by="org_evolution_auditor")
         return clean
+
+    async def stop(self, proposal_id: str) -> dict[str, Any]:
+        """Stop an evolution run, whether it is executing or paused at approval."""
+        pending = self.storage.pending_approval_for_run(proposal_id, "evolution_approval")
+        if pending:
+            self.storage.decide_approval(
+                pending["approval_id"],
+                {"decision": "stop", "notes": "Stopped by Dictator."},
+                status="stopped",
+            )
+        existing = self.storage.get_evolution(proposal_id)
+        if existing:
+            proposal = dict(existing.get("proposal") or {})
+            if proposal.get("title") in {"Evolution audit running", "Evolution audit starting"}:
+                proposal["title"] = "Evolution stopped before proposal"
+                proposal["problem"] = "The Dictator stopped the audit before the independent auditor produced a proposal."
+                proposal["status"] = "stopped"
+            self.storage.update_evolution(
+                proposal_id,
+                status="stopped",
+                decision={"decision": "stop", "notes": "Stopped by Dictator."},
+                proposal=proposal,
+            )
+        else:
+            self.storage.create_evolution(
+                {
+                    "proposal_id": proposal_id,
+                    "title": "Evolution stopped before proposal",
+                    "problem": "The Dictator stopped the evolution run before the auditor produced a proposal.",
+                    "evidence": [],
+                    "changes": [],
+                    "expected_impact": {},
+                    "risks": [],
+                    "eval_plan": [],
+                    "rollback_plan": "No change applied.",
+                    "status": "stopped",
+                },
+                focus="stopped",
+            )
+        await self.bus.publish(
+            proposal_id,
+            "evolution.stopped",
+            "Evolution stopped by Dictator",
+            "dictator",
+            {"proposal_id": proposal_id},
+        )
+        return {"proposal_id": proposal_id, "status": "stopped"}
 
     async def resume(self, proposal_id: str, decision: dict[str, Any]) -> dict[str, Any]:
         await self._ensure_graph()

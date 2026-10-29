@@ -59,13 +59,21 @@ class ModelGateway:
                 return agent
         return {"id": role, "model": "reasoner"}
 
-    def _model_config(self, role: str) -> ModelConfig:
+    def _model_config(self, role: str, model_override: str | None = None) -> ModelConfig:
         agent = self._agent_spec(role)
         alias = str(agent.get("model", "reasoner"))
         budget = self.storage.budget_summary(self.settings.monthly_token_budget)
         if budget["used_pct"] >= self.settings.token_warn_pct and role not in {"design_critic", "org_evolution"}:
             alias = "cheap"
         spec = self.registry.model_alias(alias)
+        if model_override:
+            return ModelConfig(
+                alias="override",
+                provider="opencode",
+                model=model_override,
+                input_cost=float(spec.get("cost_per_million_input", 0.0)),
+                output_cost=float(spec.get("cost_per_million_output", 0.0)),
+            )
         return ModelConfig(
             alias=alias,
             provider=str(spec.get("provider", "opencode")),
@@ -84,6 +92,7 @@ class ModelGateway:
         run_id: str | None = None,
         task_id: str | None = None,
         backend: str | None = None,
+        model_override: str | None = None,
     ) -> ModelResult:
         budget = self.storage.budget_summary(self.settings.monthly_token_budget)
         if budget["used_pct"] >= self.settings.token_hard_stop_pct:
@@ -92,7 +101,7 @@ class ModelGateway:
                 "Raise the budget or wait for the next cycle."
             )
 
-        config = self._model_config(role)
+        config = self._model_config(role, model_override)
         agent_spec = self._agent_spec(role)
         prompt_key = str(agent_spec.get("prompt_key", role))
         prompt = build_user_prompt(
@@ -202,6 +211,10 @@ class ModelGateway:
                     raise ModelProviderError(
                         f"OpenCode worker timed out after {self.settings.opencode_timeout}s"
                     )
+                except asyncio.CancelledError:
+                    proc.kill()
+                    await proc.wait()
+                    raise
             except FileNotFoundError as exc:
                 raise ModelProviderError(
                     f"OpenCode binary not found: {self.settings.opencode_bin}. "
@@ -285,7 +298,7 @@ class ModelGateway:
     def list_models(self) -> dict[str, Any]:
         return {
             "backend": self.settings.model_backend,
-            "default_model": self.settings.opencode_model,
+            "default_model": self.settings.model_override or self.settings.opencode_model,
             "aliases": self.registry.models,
             "note": "Use `opencode models` to verify availability. The gateway reuses OpenCode's provider configuration.",
         }

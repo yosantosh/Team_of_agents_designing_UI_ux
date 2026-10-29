@@ -15,123 +15,292 @@
         <p>Dictator Control Room · Native Android social app</p>
       </div>
     </div>
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-tab="overview">Overview</button>
+      <button class="tab" data-tab="flow">Live Flow</button>
+      <button class="tab" data-tab="approvals">Approvals <span class="count" id="approval-badge">0</span></button>
+      <button class="tab" data-tab="artifacts">Artifacts</button>
+      <button class="tab" data-tab="target">Target_ui</button>
+      <button class="tab" data-tab="evolution">Evolution</button>
+      <button class="tab" data-tab="settings">Settings</button>
+    </nav>
     <div class="top-actions">
-      <div class="pill" id="budget-pill">Budget —</div>
-      <div class="pill muted" id="backend-pill">—</div>
+      <button class="pill clickable" id="budget-pill" title="Click to edit monthly token budget">Budget —</button>
+      <select id="model-select" class="model-select" title="OpenCode model for new runs"></select>
       <button class="btn primary" id="evolve-btn">✦ Evolve / Improve</button>
     </div>
   </header>
 
-  <main class="layout">
-    <section class="column left">
-      <div class="card">
-        <div class="card-head">
-          <h2>Issue a decree</h2>
-          <span class="tag">Human → Orchestrator</span>
-        </div>
-        <textarea id="decree" rows="5" placeholder="e.g. Redesign the profile screen for a premium, minimal social app. Keep the pure OLED black canvas and make the primary action unmistakable."></textarea>
-        <div class="controls">
-          <label>Mode
-            <select id="mode">
-              <option value="design">Design only</option>
-              <option value="implement">Implement plan</option>
-              <option value="full">Full + QA</option>
-            </select>
-          </label>
-          <label>Backend
-            <select id="backend">
-              <option value="opencode">OpenCode</option>
-              <option value="mock">Mock (no tokens)</option>
-            </select>
-          </label>
-        </div>
-        <div class="checks">
-          <label><input type="checkbox" id="target-ui" checked /> Use Target_ui</label>
-          <label><input type="checkbox" id="demo" checked /> Demo QA (simulated)</label>
-          <label><input type="checkbox" id="auto-approve" checked /> Auto-approve design</label>
-        </div>
-        <button class="btn primary wide" id="run-btn">▶ Run the company</button>
-        <p class="hint">OpenCode calls use the project-local <code>uiux-worker</code> agent. Mock mode is deterministic and spends zero tokens.</p>
-      </div>
+  <main class="main">
+    <!-- OVERVIEW -->
+    <section id="tab-overview" class="tab-panel active">
+      <div class="overview-grid">
+        <div class="column">
+          <div class="card">
+            <div class="card-head">
+              <h2>Issue a decree</h2>
+              <span class="tag">Human → Orchestrator</span>
+            </div>
+            <textarea id="decree" rows="5" placeholder="e.g. Redesign the profile screen for a premium, minimal social app. Keep the pure OLED black canvas and make the primary action unmistakable."></textarea>
+            <div class="controls">
+              <label>Mode
+                <select id="mode">
+                  <option value="design">Design only</option>
+                  <option value="implement">Implement plan</option>
+                  <option value="full">Full + QA</option>
+                </select>
+              </label>
+              <label>Model
+                <select id="run-model"></select>
+              </label>
+            </div>
+            <div class="checks">
+              <label><input type="checkbox" id="target-ui" checked /> Use Target_ui</label>
+              <label><input type="checkbox" id="auto-approve" checked /> Auto-approve design</label>
+            </div>
+            <button class="btn primary wide" id="run-btn">▶ Run the company</button>
+            <p class="hint">Runs use the project-local <code>uiux-worker</code> OpenCode agent. No mock data is used from this panel.</p>
+          </div>
 
+          <div class="card">
+            <div class="card-head"><h2>Recent runs</h2><span class="tag" id="run-count">0</span></div>
+            <div id="runs" class="list scroll"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>Target_ui</h2><button class="btn ghost small" id="overview-scan-target">Scan</button></div>
+            <div id="target-mini" class="muted">Loading…</div>
+            <div id="target-thumbs" class="thumbs"></div>
+            <p class="hint">Tiered precedence: target wins layout/composition; tokens and Android/a11y law win color, type, and accessibility.</p>
+          </div>
+        </div>
+
+        <div class="column center-column">
+          <div class="card live-card">
+            <div class="card-head">
+              <h2>Live run</h2>
+              <div class="row">
+                <span class="status" id="run-status">idle</span>
+                <button class="btn ghost small" id="open-flow">Open full flow ↗</button>
+              </div>
+            </div>
+            <div class="run-meta" id="run-meta">No run selected. Issue a decree to begin.</div>
+            <div id="timeline" class="timeline scroll"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>Agent company</h2><span class="tag" id="org-summary-tag">6 tiers</span></div>
+            <div id="org-summary" class="org-summary"></div>
+            <p class="hint">The full interactive hierarchy is in <b>Live Flow</b>. Click any agent there to inspect its progress, outputs, and token usage.</p>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>Artifacts</h2><span class="tag" id="artifact-count">0</span></div>
+            <div id="artifacts-quick" class="artifacts"></div>
+          </div>
+        </div>
+
+        <div class="column">
+          <div class="card">
+            <div class="card-head"><h2>Dictator inbox</h2><span class="tag" id="approval-count">0</span></div>
+            <div id="approvals-quick" class="list scroll"></div>
+            <p class="hint">One-way-door decisions only. Approve, reject, or dictate a custom answer.</p>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>Token budget</h2><span class="tag" id="budget-pct">—</span></div>
+            <div class="bar"><div class="bar-fill" id="budget-bar"></div></div>
+            <div id="budget-details" class="kv"></div>
+            <p class="hint">Click the budget pill or edit it in Settings. 80% routes non-critical work to the cheap alias; 100% hard-stops non-critical runs.</p>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>Evolution lab</h2><span class="tag">proposal → eval → you</span></div>
+            <div id="evolutions-quick" class="list scroll"></div>
+            <button class="btn ghost small wide" id="open-evolution">Open evolution lab ↗</button>
+          </div>
+
+          <div class="card small-card">
+            <div class="card-head"><h2>Production law</h2></div>
+            <ul class="laws">
+              <li>No mock data in the production control room.</li>
+              <li>Roborazzi removed. Visual QA uses emulator/ADB capture.</li>
+              <li>Every artifact is versioned, hashed, and linked to a run.</li>
+              <li>LangSmith is the flight recorder; this is the control room.</li>
+              <li>No agent may approve its own evolution.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- LIVE FLOW -->
+    <section id="tab-flow" class="tab-panel">
+      <div class="card flow-toolbar">
+        <div>
+          <h2>Live orchestration flow</h2>
+          <p class="muted">Full hierarchical view of the running agent company. Click an agent to inspect its progress.</p>
+        </div>
+        <div class="row">
+          <select id="flow-run-select" class="wide-select"></select>
+          <button class="btn ghost small" id="flow-refresh">Refresh</button>
+        </div>
+      </div>
+      <div class="flow-layout">
+        <div class="card flow-card">
+          <div class="flow-legend">
+            <span><i class="dot idle"></i> Idle</span>
+            <span><i class="dot running"></i> Running</span>
+            <span><i class="dot completed"></i> Completed</span>
+            <span><i class="dot failed"></i> Error</span>
+            <span><i class="dot waiting"></i> Waiting for you</span>
+            <span><i class="dot disabled"></i> On-demand</span>
+          </div>
+          <div id="flow-canvas" class="flow-canvas">
+            <svg id="flow-edges" class="flow-edges"></svg>
+            <div id="flow-nodes" class="flow-nodes"></div>
+          </div>
+        </div>
+        <div class="card flow-events-card">
+          <div class="card-head"><h2>Agent events</h2><span class="tag" id="flow-event-count">0</span></div>
+          <div id="flow-event-list" class="timeline scroll tall"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- APPROVALS -->
+    <section id="tab-approvals" class="tab-panel">
+      <div class="card">
+        <div class="card-head"><h2>Pending decisions</h2><span class="tag" id="pending-approvals-count">0</span></div>
+        <div id="approvals-pending" class="approval-grid"></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Decision history</h2></div>
+        <div id="approvals-history" class="list scroll tall"></div>
+      </div>
+    </section>
+
+    <!-- ARTIFACTS -->
+    <section id="tab-artifacts" class="tab-panel">
       <div class="card">
         <div class="card-head">
-          <h2>Target_ui</h2>
-          <button class="btn ghost small" id="scan-target">Scan folder</button>
+          <h2>Artifacts</h2>
+          <div class="row">
+            <select id="artifact-run-select" class="wide-select"></select>
+            <button class="btn ghost small" id="upload-screenshots">Upload screenshots</button>
+            <input type="file" id="screenshot-input" accept="image/*" multiple hidden />
+          </div>
         </div>
+        <p class="hint">Real screenshots are required for visual QA release evidence. Uploaded files go to the selected run's <code>screenshots/</code> folder.</p>
+      </div>
+      <div class="artifacts-layout">
+        <div class="card"><div id="artifact-list" class="artifact-list scroll tall"></div></div>
+        <div class="card"><div id="artifact-preview" class="artifact-preview">Select an artifact to preview it.</div></div>
+      </div>
+    </section>
+
+    <!-- TARGET UI -->
+    <section id="tab-target" class="tab-panel">
+      <div class="card">
+        <div class="card-head">
+          <h2>Target_ui reference</h2>
+          <div class="row">
+            <button class="btn ghost small" id="browse-target">Browse folder</button>
+            <button class="btn ghost small" id="scan-target">Scan</button>
+            <button class="btn primary small" id="analyze-target">Scan + analyze</button>
+          </div>
+        </div>
+        <div class="path-display" id="target-path">—</div>
         <div id="target-status" class="muted">Loading…</div>
-        <div id="target-images" class="thumbs"></div>
-        <p class="hint">Tiered precedence: target wins layout/composition; tokens and Android/a11y law win color, type, and accessibility. Conflicts escalate to you.</p>
       </div>
-
-      <div class="card">
-        <div class="card-head"><h2>Recent runs</h2><span class="tag" id="run-count">0</span></div>
-        <div id="runs" class="list"></div>
+      <div class="target-layout">
+        <div class="card"><div id="target-images" class="target-grid"></div></div>
+        <div class="card">
+          <div class="card-head"><h2>Conflicts & confidence</h2></div>
+          <div id="target-conflicts" class="list scroll tall"></div>
+        </div>
       </div>
     </section>
 
-    <section class="column center">
-      <div class="card live-card">
-        <div class="card-head">
-          <h2>Live run</h2>
-          <span class="status" id="run-status">idle</span>
+    <!-- EVOLUTION -->
+    <section id="tab-evolution" class="tab-panel">
+      <div class="card evolution-toolbar">
+        <div>
+          <h2>Evolution / Improve</h2>
+          <p class="muted">The independent auditor observes traces, rework, cost, and gates, then proposes one controlled change. It cannot approve itself.</p>
         </div>
-        <div class="run-meta" id="run-meta">No run selected. Issue a decree to begin.</div>
-        <div id="timeline" class="timeline"></div>
-      </div>
-
-      <div class="card">
-        <div class="card-head">
-          <h2>Agent company</h2>
-          <span class="tag">LangGraph · 6 tiers</span>
+        <div class="row">
+          <select id="evolution-select" class="wide-select" style="max-width:340px"></select>
+          <span class="status" id="evolution-status">idle</span>
+          <button class="btn primary small" id="evolution-start">✦ Start audit</button>
+          <button class="btn danger small" id="evolution-stop" disabled>■ Stop</button>
         </div>
-        <div id="org" class="org"></div>
       </div>
-
-      <div class="card">
-        <div class="card-head"><h2>Artifacts</h2><span class="tag" id="artifact-count">0</span></div>
-        <div id="artifacts" class="artifacts"></div>
+      <div id="evolution-cards" class="evolution-cards"></div>
+      <div class="evolution-layout">
+        <div class="card" id="evolution-proposal">
+          <div class="muted">No evolution proposal selected. Start an audit or pick one from the Overview.</div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Evolution events</h2><span class="tag" id="evolution-event-count">0</span></div>
+          <div id="evolution-events" class="timeline scroll tall"></div>
+        </div>
       </div>
     </section>
 
-    <section class="column right">
-      <div class="card">
-        <div class="card-head"><h2>Dictator inbox</h2><span class="tag" id="approval-count">0</span></div>
-        <div id="approvals" class="list"></div>
-        <p class="hint">Only one-way-door decisions reach you: design direction, high-risk changes, and releases.</p>
-      </div>
-
-      <div class="card">
-        <div class="card-head"><h2>Token budget</h2><span class="tag" id="budget-pct">—</span></div>
-        <div class="bar"><div class="bar-fill" id="budget-bar"></div></div>
-        <div id="budget-details" class="kv"></div>
-        <p class="hint">80% routes non-critical work to the cheap alias. 100% hard-stops non-critical runs. Incidents are reserved.</p>
-      </div>
-
-      <div class="card">
-        <div class="card-head"><h2>Evolution lab</h2><span class="tag">proposal → eval → you</span></div>
-        <div id="evolutions" class="list"></div>
-        <div id="evolution-detail"></div>
-      </div>
-
-      <div class="card small-card">
-        <div class="card-head"><h2>Production law</h2></div>
-        <ul class="laws">
-          <li>Roborazzi removed. Visual QA uses emulator/ADB capture.</li>
-          <li>Every artifact is versioned, hashed, and linked to a run.</li>
-          <li>LangSmith is the flight recorder; this is the control room.</li>
-          <li>No agent may approve its own evolution.</li>
-          <li>Simulated evidence is labeled and never shipped silently.</li>
-        </ul>
+    <!-- SETTINGS -->
+    <section id="tab-settings" class="tab-panel">
+      <div class="settings-grid">
+        <div class="card">
+          <div class="card-head"><h2>Project directory</h2><button class="btn ghost small" id="browse-project">Browse</button></div>
+          <div class="path-display" id="settings-project-dir">—</div>
+          <p class="hint">The Android project the implementation agents will inspect. Used in every new run's context.</p>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Target_ui directory</h2><button class="btn ghost small" id="browse-target-settings">Browse</button></div>
+          <div class="path-display" id="settings-target-dir">—</div>
+          <p class="hint">Reference images folder. If empty, the company uses the research-led no-target path.</p>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>OpenCode model</h2><div class="row"><button class="btn ghost small" id="refresh-models">Refresh</button></div></div>
+          <select id="settings-model" class="wide-select"></select>
+          <p class="hint">Every model exposed by <code>opencode models</code>. The selected model is used for new runs unless a run overrides it.</p>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Monthly token budget</h2><button class="btn ghost small" id="edit-budget-settings">Edit</button></div>
+          <div class="big-number" id="settings-budget">—</div>
+          <p class="hint">This is the hard monthly ceiling in total tokens. 15% is reserved for incidents.</p>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Autonomy level</h2></div>
+          <select id="settings-autonomy" class="wide-select">
+            <option value="L0">L0 — advise only</option>
+            <option value="L1">L1 — spec only</option>
+            <option value="L2">L2 — PRs, human merges</option>
+            <option value="L3">L3 — auto-merge low risk</option>
+            <option value="L4">L4 — auto-release within policy</option>
+          </select>
+          <p class="hint">L2 is the production launch default. L4 is a research goal, not a starting point.</p>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Runtime</h2></div>
+          <div class="kv" id="settings-runtime"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Production cleanup</h2><button class="btn danger small" id="purge-mock">Purge mock/demo data</button></div>
+          <p class="hint">Removes local mock/demo runs, approvals, artifacts, and mock token rows. Does not touch real OpenCode runs, the project, or the registry.</p>
+        </div>
       </div>
     </section>
   </main>
 
   <footer class="footer">
-    <span>LangGraph control plane · OpenCode model gateway · Target_ui manifest · Evolution graph</span>
+    <span>LangGraph control plane · OpenCode gateway · Target_ui manifest · Evolution graph</span>
     <span id="footer-status">—</span>
   </footer>
 
+  <div id="modal-root"></div>
+  <div id="toast" class="toast hidden"></div>
   <script src="/static/app.js"></script>
 </body>
 </html>

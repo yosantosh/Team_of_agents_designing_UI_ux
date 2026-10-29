@@ -138,6 +138,7 @@ class RunRequest(FlexModel):
     auto_approve: bool | None = None
     demo: bool = False
     backend: Literal["opencode", "mock"] | None = None
+    model: str | None = None
     autonomy_level: str | None = None
 
 

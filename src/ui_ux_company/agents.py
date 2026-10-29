@@ -30,6 +30,7 @@ class AgentRunner:
         run_id: str | None = None,
         task_id: str | None = None,
         backend: str | None = None,
+        model: str | None = None,
     ) -> AgentResult:
         result = await self.gateway.generate(
             role,
@@ -39,6 +40,7 @@ class AgentRunner:
             run_id=run_id,
             task_id=task_id,
             backend=backend,
+            model_override=model,
         )
         return AgentResult(
             role=role,
@@ -62,9 +64,10 @@ class AgentRunner:
         *,
         run_id: str | None = None,
         backend: str | None = None,
+        model: str | None = None,
     ) -> list[AgentResult]:
         tasks = [
-            self.run(role, goal, context, images=images, run_id=run_id, task_id=role, backend=backend)
+            self.run(role, goal, context, images=images, run_id=run_id, task_id=role, backend=backend, model=model)
             for role, goal, context, images in jobs
         ]
         return list(await asyncio.gather(*tasks))

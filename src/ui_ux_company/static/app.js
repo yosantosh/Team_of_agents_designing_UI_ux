@@ -3,16 +3,26 @@ const state = {
   registry: null,
   budget: null,
   approvals: [],
+  allApprovals: [],
   runs: [],
   targetManifest: null,
   evolutions: [],
+  settings: null,
+  models: null,
   runId: null,
   run: null,
+  runState: {},
   events: [],
   artifacts: [],
-  agentEls: {},
-  source: null,
+  agentStatus: {},
+  flowRunId: null,
+  artifactRunId: null,
+  evolutionId: null,
   evolution: null,
+  evolutionEvents: [],
+  activeTab: "overview",
+  runSource: null,
+  evolutionSource: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -41,6 +51,14 @@ async function api(path, options = {}) {
   return data;
 }
 
+function toast(message, type = "success") {
+  const el = $("toast");
+  el.textContent = message;
+  el.className = `toast ${type}`;
+  clearTimeout(toast._timer);
+  toast._timer = setTimeout(() => { el.className = "toast hidden"; }, 4200);
+}
+
 function fmtTime(iso) {
   if (!iso) return "";
   try { return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }); }
@@ -49,94 +67,135 @@ function fmtTime(iso) {
 
 function fmtNumber(value) {
   const n = Number(value || 0);
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)}B`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
 }
 
+function short(text, length = 130) {
+  const value = String(text || "");
+  return value.length > length ? `${value.slice(0, length)}…` : value;
+}
+
+function statusClass(value) {
+  return String(value || "idle").toLowerCase().replaceAll(" ", "_");
+}
+
+function switchTab(name) {
+  state.activeTab = name;
+  if (location.hash !== `#${name}`) history.replaceState(null, "", `#${name}`);
+  document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.tab === name));
+  document.querySelectorAll(".tab-panel").forEach((panel) => panel.classList.toggle("active", panel.id === `tab-${name}`));
+  if (name === "flow") {
+    renderFlow();
+    setTimeout(drawFlowEdges, 40);
+  }
+  if (name === "artifacts") renderArtifactsTab();
+  if (name === "target") renderTarget();
+  if (name === "evolution") {
+    if (!state.evolutionId) state.evolutionId = defaultEvolutionId();
+    if (state.evolutionId) loadEvolution(state.evolutionId, true);
+    else renderEvolution();
+  }
+  if (name === "settings") renderSettings();
+  if (name === "approvals") renderApprovals();
+}
+
+// ------------------------------------------------------------------ init
 async function init() {
   try {
-    state.health = await api("/api/health");
-    state.registry = await api("/api/registry");
-    state.budget = await api("/api/budget");
-    state.approvals = (await api("/api/approvals")).approvals || [];
-    state.runs = (await api("/api/runs")).runs || [];
-    state.targetManifest = await api("/api/target-ui");
-    state.evolutions = (await api("/api/evolve")).proposals || [];
-    if (state.health.model_backend === "mock") $("backend").value = "mock";
-    renderHealth();
-    renderOrg();
-    renderBudget();
-    renderApprovals();
-    renderRuns();
-    renderTarget();
-    renderEvolutions();
-    renderTimeline();
+    const [health, registry, budget, pending, allApprovals, runs, target, evolutions, settings] = await Promise.all([
+      api("/api/health"),
+      api("/api/registry"),
+      api("/api/budget"),
+      api("/api/approvals?status=pending"),
+      api("/api/approvals?status=all"),
+      api("/api/runs"),
+      api("/api/target-ui"),
+      api("/api/evolve"),
+      api("/api/settings"),
+    ]);
+    state.health = health;
+    state.registry = registry;
+    state.budget = budget;
+    state.approvals = pending.approvals || [];
+    state.allApprovals = allApprovals.approvals || [];
+    state.runs = filterProductionRuns(runs.runs || []);
+    state.targetManifest = target;
+    state.evolutions = evolutions.proposals || [];
+    state.settings = settings;
+    await loadModels(false);
+    state.evolutionId = defaultEvolutionId();
+    renderAll();
+    const initialTab = location.hash.replace("#", "");
+    if (initialTab) switchTab(initialTab);
+    if (state.runs[0]) await loadRun(state.runs[0].run_id, false);
+    if (state.evolutionId) await loadEvolution(state.evolutionId, false);
+    setInterval(poll, 4000);
   } catch (error) {
     $("footer-status").textContent = `init error: ${error.message}`;
+    toast(`Init error: ${error.message}`, "error");
   }
-  setInterval(poll, 4000);
+}
+
+function filterProductionRuns(runs) {
+  return (runs || []).filter((run) => {
+    const internal = run.state || {};
+    return internal.backend !== "mock";
+  });
 }
 
 async function poll() {
   try {
-    state.budget = await api("/api/budget");
-    state.approvals = (await api("/api/approvals")).approvals || [];
-    state.runs = (await api("/api/runs")).runs || [];
-    state.evolutions = (await api("/api/evolve")).proposals || [];
+    const [budget, pending, allApprovals, runs, evolutions] = await Promise.all([
+      api("/api/budget"),
+      api("/api/approvals?status=pending"),
+      api("/api/approvals?status=all"),
+      api("/api/runs"),
+      api("/api/evolve"),
+    ]);
+    state.budget = budget;
+    state.approvals = pending.approvals || [];
+    state.allApprovals = allApprovals.approvals || [];
+    state.runs = filterProductionRuns(runs.runs || []);
+    state.evolutions = evolutions.proposals || [];
     renderBudget();
     renderApprovals();
     renderRuns();
     renderEvolutions();
+    renderOrgSummary();
     if (state.runId) await loadRun(state.runId, false);
+    if (state.evolutionId) await loadEvolution(state.evolutionId, false);
   } catch (error) {
     $("footer-status").textContent = `poll error: ${error.message}`;
   }
 }
 
+function renderAll() {
+  renderHealth();
+  renderOrgSummary();
+  renderBudget();
+  renderApprovals();
+  renderRuns();
+  renderTarget();
+  renderEvolutions();
+  renderSettings();
+  renderTimeline();
+  renderArtifactsQuick();
+  renderArtifactsTab();
+  renderRunMeta();
+  renderFlow();
+  renderEvolution();
+}
+
+// ------------------------------------------------------------------ header
 function renderHealth() {
   const h = state.health;
   if (!h) return;
-  $("backend-pill").textContent = `${h.model_backend} · ${h.model}`;
+  const b = h.budget || state.budget;
+  if (b) $("budget-pill").textContent = `Budget ${b.used_pct}% · ${fmtNumber(b.remaining_tokens)} tokens left`;
   $("footer-status").textContent = `registry ${h.registry_version} · autonomy ${h.autonomy_level} · visual QA ${h.visual_qa_backend} · Roborazzi: ${h.roborezzi ? "on" : "off"}`;
-  const budget = h.budget;
-  $("budget-pill").textContent = `Budget ${budget.used_pct}% · ${fmtNumber(budget.remaining_tokens)} tokens left`;
-}
-
-function renderOrg() {
-  const org = $("org");
-  const registry = state.registry?.registry;
-  if (!registry) { org.innerHTML = `<div class="muted">Registry unavailable.</div>`; return; }
-  const tiers = {};
-  (registry.agents || []).forEach((agent) => {
-    const tier = Number(agent.tier ?? 99);
-    (tiers[tier] ||= []).push(agent);
-  });
-  const tierMeta = Object.fromEntries((registry.tiers || []).map((t) => [Number(t.id), t.name]));
-  state.agentEls = {};
-  org.innerHTML = Object.entries(tiers).sort(([a], [b]) => Number(a) - Number(b)).map(([tier, agents]) => `
-    <div class="tier">
-      <div class="tier-title">Tier ${tier} · ${escapeHtml(tierMeta[Number(tier)] || "")}</div>
-      <div class="agents">
-        ${agents.map((agent) => `
-          <div class="agent ${agent.enabled ? "enabled" : "disabled"}" data-agent="${escapeHtml(agent.id)}" title="${escapeHtml(agent.mission || "")}">
-            <div class="name">${escapeHtml(agent.title || agent.id)}</div>
-            <div class="role">${escapeHtml(agent.model || "")} · ${agent.enabled ? "active" : "on-demand"}</div>
-          </div>
-        `).join("")}
-      </div>
-    </div>
-  `).join("");
-  org.querySelectorAll(".agent").forEach((el) => { state.agentEls[el.dataset.agent] = el; });
-}
-
-function setAgentStatus(agentId, status) {
-  const el = state.agentEls[agentId];
-  if (!el) return;
-  el.classList.remove("active", "done", "failed");
-  if (status === "started") el.classList.add("active");
-  if (status === "completed") el.classList.add("done");
-  if (status === "failed") el.classList.add("failed");
 }
 
 function renderBudget() {
@@ -152,93 +211,92 @@ function renderBudget() {
     <span>Top agent</span><b>${escapeHtml(Object.keys(b.by_agent || {})[0] || "—")}</b>
     <span>Top model</span><b>${escapeHtml(Object.keys(b.by_model || {})[0] || "—")}</b>
   `;
+  if (state.settings) state.settings.monthly_token_budget = b.monthly_total_tokens;
 }
 
-function renderApprovals() {
-  const list = $("approvals");
-  const approvals = state.approvals || [];
-  $("approval-count").textContent = String(approvals.length);
-  if (!approvals.length) {
-    list.innerHTML = `<div class="muted">No decisions waiting. The company is operating within its mandate.</div>`;
+// ------------------------------------------------------------------ models
+async function loadModels(force = false) {
+  try {
+    const data = await api(`/api/opencode/models${force ? "?refresh=1" : ""}`);
+    state.models = data;
+    const selected = state.settings?.model || data.default || "";
+    fillModelSelect($("model-select"), selected);
+    fillModelSelect($("run-model"), selected);
+    fillModelSelect($("settings-model"), selected);
+    if (data.error) toast(`OpenCode models: ${data.error}`, "error");
+  } catch (error) {
+    toast(`Could not list OpenCode models: ${error.message}`, "error");
+  }
+}
+
+function fillModelSelect(select, selected) {
+  if (!select) return;
+  const grouped = state.models?.grouped || {};
+  const all = state.models?.models || [];
+  select.innerHTML = "";
+  if (!all.length) {
+    const option = document.createElement("option");
+    option.value = selected || "";
+    option.textContent = selected || "Model unavailable";
+    select.appendChild(option);
     return;
   }
-  list.innerHTML = approvals.map((a) => `
-    <div class="item">
-      <div class="title">${escapeHtml(a.title)}</div>
-      <div class="meta"><span class="badge pending">${escapeHtml(a.gate)}</span><span>${fmtTime(a.created_at)}</span></div>
-      <div class="muted" style="margin-top:6px">${escapeHtml((a.message || "").slice(0, 260))}</div>
-      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-        <button class="btn small primary" data-approval="${escapeHtml(a.approval_id)}" data-decision="approve">Approve</button>
-        <button class="btn small danger" data-approval="${escapeHtml(a.approval_id)}" data-decision="reject">Reject</button>
-        <button class="btn small ghost" data-approval="${escapeHtml(a.approval_id)}" data-decision="override">Override</button>
-      </div>
-    </div>
-  `).join("");
-  list.querySelectorAll("button[data-approval]").forEach((button) => {
-    button.addEventListener("click", () => decideApproval(button.dataset.approval, button.dataset.decision));
-  });
+  for (const [provider, models] of Object.entries(grouped)) {
+    const group = document.createElement("optgroup");
+    group.label = provider;
+    for (const model of models) {
+      const option = document.createElement("option");
+      option.value = model;
+      option.textContent = model;
+      if (model === selected) option.selected = true;
+      group.appendChild(option);
+    }
+    select.appendChild(group);
+  }
+  if (selected && !all.includes(selected)) {
+    const option = document.createElement("option");
+    option.value = selected;
+    option.textContent = selected;
+    option.selected = true;
+    select.insertBefore(option, select.firstChild);
+  }
+  if (selected) select.value = selected;
 }
 
-async function decideApproval(approvalId, decision) {
+async function saveSettings(payload) {
   try {
-    await api(`/api/approvals/${encodeURIComponent(approvalId)}/decide`, {
-      method: "POST",
-      body: JSON.stringify({ decision, notes: `Decision from control room: ${decision}` }),
-    });
-    await poll();
-    if (state.runId) await loadRun(state.runId, false);
+    const updated = await api("/api/settings", { method: "PUT", body: JSON.stringify(payload) });
+    state.settings = updated;
+    state.health = await api("/api/health");
+    state.budget = await api("/api/budget");
+    if (updated.model) {
+      fillModelSelect($("model-select"), updated.model);
+      fillModelSelect($("run-model"), updated.model);
+      fillModelSelect($("settings-model"), updated.model);
+    }
+    renderSettings();
+    renderBudget();
+    renderHealth();
+    toast("Settings saved.");
+    return updated;
   } catch (error) {
-    $("footer-status").textContent = `approval error: ${error.message}`;
+    toast(`Settings error: ${error.message}`, "error");
+    throw error;
   }
 }
 
-function renderRuns() {
-  const runs = state.runs || [];
-  $("run-count").textContent = String(runs.length);
-  const list = $("runs");
-  if (!runs.length) { list.innerHTML = `<div class="muted">No runs yet.</div>`; return; }
-  list.innerHTML = runs.slice(0, 12).map((run) => `
-    <div class="item clickable" data-run="${escapeHtml(run.run_id)}">
-      <div class="title">${escapeHtml((run.prompt || "").slice(0, 110))}</div>
-      <div class="meta">
-        <span class="badge ${escapeHtml(run.status)}">${escapeHtml(run.status)}</span>
-        <span>${escapeHtml(run.mode)}</span>
-        <span>${fmtTime(run.created_at)}</span>
-      </div>
-    </div>
-  `).join("");
-  list.querySelectorAll("[data-run]").forEach((el) => {
-    el.addEventListener("click", () => loadRun(el.dataset.run, true));
-  });
-}
-
-async function loadRun(runId, connect = true) {
-  try {
-    const data = await api(`/api/runs/${encodeURIComponent(runId)}`);
-    state.runId = runId;
-    state.run = data.run;
-    state.runState = data.state || {};
-    state.events = data.events || [];
-    state.artifacts = data.artifacts || [];
-    renderRunMeta();
-    renderTimeline();
-    renderArtifacts();
-    if (connect) connectEvents(runId, state.events.length ? state.events[state.events.length - 1].id : 0);
-  } catch (error) {
-    $("footer-status").textContent = `run load error: ${error.message}`;
-  }
-}
-
+// ------------------------------------------------------------------ overview
 function renderRunMeta() {
   const run = state.run;
-  const values = (state.runState || {}).values || {};
   if (!run) {
     $("run-status").textContent = "idle";
+    $("run-status").className = "status";
     $("run-meta").textContent = "No run selected. Issue a decree to begin.";
     return;
   }
+  const values = state.runState?.values || {};
   $("run-status").textContent = run.status;
-  $("run-status").className = `status ${run.status}`;
+  $("run-status").className = `status ${statusClass(run.status)}`;
   const gates = [
     values.critique_gate ? `critique:${values.critique_gate}` : null,
     values.eval_gate ? `eval:${values.eval_gate}` : null,
@@ -247,35 +305,8 @@ function renderRunMeta() {
   $("run-meta").innerHTML = `
     <b>${escapeHtml(run.run_id)}</b> · ${escapeHtml(run.mode)} · ${escapeHtml(run.status)}
     ${gates ? `<br><span class="muted">${escapeHtml(gates)}</span>` : ""}
-    <br><span class="muted">${escapeHtml((run.prompt || "").slice(0, 220))}</span>
+    <br><span class="muted">${escapeHtml(short(run.prompt, 240))}</span>
   `;
-}
-
-function connectEvents(runId, afterId = 0) {
-  if (state.source) state.source.close();
-  const source = new EventSource(`/api/runs/${encodeURIComponent(runId)}/events?after_id=${afterId || 0}`);
-  state.source = source;
-  source.onmessage = (message) => {
-    try { handleEvent(JSON.parse(message.data)); } catch { /* ignore */ }
-  };
-  source.onerror = () => {
-    $("footer-status").textContent = "event stream reconnecting…";
-  };
-}
-
-function handleEvent(event) {
-  state.events.push(event);
-  if (event.agent_id) {
-    if (event.type === "agent.started") setAgentStatus(event.agent_id, "started");
-    if (event.type === "agent.completed") setAgentStatus(event.agent_id, "completed");
-    if (event.type === "agent.failed") setAgentStatus(event.agent_id, "failed");
-  }
-  if (event.type === "approval.required") poll();
-  if (["run.completed", "run.paused", "run.failed", "run.started", "run.resumed"].includes(event.type)) {
-    if (state.runId) loadRun(state.runId, false);
-    poll();
-  }
-  renderTimeline();
 }
 
 function renderTimeline() {
@@ -297,53 +328,1027 @@ function renderTimeline() {
   timeline.scrollTop = timeline.scrollHeight;
 }
 
-function renderArtifacts() {
-  const artifacts = state.artifacts || [];
-  $("artifact-count").textContent = String(artifacts.length);
-  const list = $("artifacts");
-  if (!artifacts.length) { list.innerHTML = `<div class="muted">Artifacts appear here as the run progresses.</div>`; return; }
-  list.innerHTML = artifacts.map((artifact) => `
-    <a class="artifact" href="/api/artifacts/${encodeURIComponent(artifact.run_id)}/${encodeURIComponent(artifact.name)}" target="_blank" rel="noreferrer">
-      ${escapeHtml(artifact.name)}
-      <span>${escapeHtml(artifact.content_type || "")} · ${fmtTime(artifact.created_at)}</span>
-    </a>
-  `).join("");
-}
-
-function renderTarget() {
-  const manifest = state.targetManifest || {};
-  const images = manifest.images || [];
-  $("target-status").innerHTML = `
-    <span class="badge ${images.length ? "pass" : "pending"}">${escapeHtml(manifest.status || "unknown")}</span>
-    <span class="muted"> ${images.length} image(s) · ${escapeHtml(manifest.precedence || "tiered")}</span>
-  `;
-  $("target-images").innerHTML = images.slice(0, 6).map((image) => `
-    <div class="thumb">
-      <img src="/api/target-ui/image?path=${encodeURIComponent(image.file)}" alt="${escapeHtml(image.screen || "target")}" onerror="this.style.display='none'" />
-      <span>${escapeHtml(image.screen || "unknown")}</span>
+function renderOrgSummary() {
+  const registry = state.registry?.registry;
+  if (!registry) { $("org-summary").innerHTML = `<div class="muted">Registry unavailable.</div>`; return; }
+  const tiers = {};
+  (registry.agents || []).forEach((agent) => {
+    const tier = Number(agent.tier ?? 99);
+    (tiers[tier] ||= []).push(agent);
+  });
+  const tierMeta = Object.fromEntries((registry.tiers || []).map((t) => [Number(t.id), t.name]));
+  const activeCount = Object.values(state.agentStatus || {}).filter((s) => ["running", "waiting"].includes(s)).length;
+  $("org-summary-tag").textContent = `${registry.agents.length} agents · ${activeCount} active`;
+  $("org-summary").innerHTML = Object.entries(tiers).sort(([a], [b]) => Number(a) - Number(b)).map(([tier, agents]) => `
+    <div class="tier-line">
+      <div class="tier-name">T${tier} · ${escapeHtml(tierMeta[Number(tier)] || "")}</div>
+      <div class="chips">
+        ${agents.map((agent) => {
+          const status = state.agentStatus[agent.id] || (agent.enabled ? "idle" : "disabled");
+          return `<span class="chip ${status === "running" ? "active" : ""}" title="${escapeHtml(agent.mission || "")}">${escapeHtml(agent.title || agent.id)}</span>`;
+        }).join("")}
+      </div>
     </div>
   `).join("");
 }
 
-async function scanTarget() {
-  $("scan-target").disabled = true;
-  try {
-    state.targetManifest = await api("/api/target-ui/scan", {
-      method: "POST",
-      body: JSON.stringify({ analyze: false }),
+function renderRuns() {
+  const runs = state.runs || [];
+  $("run-count").textContent = String(runs.length);
+  const list = $("runs");
+  if (!runs.length) {
+    list.innerHTML = `<div class="muted">No production runs yet. Issue a decree.</div>`;
+  } else {
+    list.innerHTML = runs.slice(0, 12).map((run) => `
+      <div class="item clickable" data-run="${escapeHtml(run.run_id)}">
+        <div class="title">${escapeHtml(short(run.prompt, 120))}</div>
+        <div class="meta">
+          <span class="badge ${statusClass(run.status)}">${escapeHtml(run.status)}</span>
+          <span>${escapeHtml(run.mode)}</span>
+          <span>${fmtTime(run.created_at)}</span>
+        </div>
+      </div>
+    `).join("");
+    list.querySelectorAll("[data-run]").forEach((el) => {
+      el.addEventListener("click", () => { loadRun(el.dataset.run, true); switchTab("flow"); });
     });
-    renderTarget();
+  }
+  fillRunSelect($("flow-run-select"), state.flowRunId || state.runId);
+  fillRunSelect($("artifact-run-select"), state.artifactRunId || state.runId);
+}
+
+function fillRunSelect(select, selected) {
+  if (!select) return;
+  const runs = state.runs || [];
+  select.innerHTML = "";
+  if (!runs.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "No production runs";
+    select.appendChild(option);
+    return;
+  }
+  for (const run of runs) {
+    const option = document.createElement("option");
+    option.value = run.run_id;
+    option.textContent = `${run.status} · ${short(run.prompt, 70)}`;
+    if (run.run_id === selected) option.selected = true;
+    select.appendChild(option);
+  }
+  if (selected) select.value = selected;
+}
+
+// ------------------------------------------------------------------ live run
+async function loadRun(runId, connect = true) {
+  if (!runId) return;
+  try {
+    const data = await api(`/api/runs/${encodeURIComponent(runId)}`);
+    state.runId = runId;
+    state.run = data.run;
+    state.runState = data.state || {};
+    state.events = data.events || [];
+    state.artifacts = data.artifacts || [];
+    state.flowRunId = runId;
+    state.artifactRunId = runId;
+    deriveAgentStatus();
+    renderRunMeta();
+    renderTimeline();
+    renderArtifactsQuick();
+    renderArtifactsTab();
+    renderFlow();
+    renderOrgSummary();
+    fillRunSelect($("flow-run-select"), runId);
+    fillRunSelect($("artifact-run-select"), runId);
+    if (connect) connectRunEvents(runId, state.events.length ? state.events[state.events.length - 1].id : 0);
   } catch (error) {
-    $("footer-status").textContent = `target scan error: ${error.message}`;
-  } finally {
-    $("scan-target").disabled = false;
+    toast(`Run load error: ${error.message}`, "error");
   }
 }
+
+function deriveAgentStatus() {
+  const statuses = {};
+  for (const agent of state.registry?.registry?.agents || []) {
+    statuses[agent.id] = agent.enabled ? "idle" : "disabled";
+  }
+  for (const event of state.events || []) {
+    if (!event.agent_id) continue;
+    if (event.type === "agent.started") statuses[event.agent_id] = "running";
+    if (event.type === "agent.completed") statuses[event.agent_id] = "completed";
+    if (event.type === "agent.failed") statuses[event.agent_id] = "failed";
+    if (event.type === "approval.required") statuses.dictator = "waiting";
+  }
+  if (state.run?.status === "awaiting_approval" || state.run?.status === "escalated") statuses.dictator = "waiting";
+  if (state.run?.status === "completed") {
+    for (const [id, status] of Object.entries(statuses)) {
+      if (status === "running") statuses[id] = "completed";
+    }
+    statuses.dictator = "completed";
+  }
+  if (state.run?.status === "failed") {
+    for (const [id, status] of Object.entries(statuses)) {
+      if (status === "running") statuses[id] = "failed";
+    }
+  }
+  state.agentStatus = statuses;
+}
+
+function connectRunEvents(runId, afterId = 0) {
+  if (state.runSource) state.runSource.close();
+  const source = new EventSource(`/api/runs/${encodeURIComponent(runId)}/events?after_id=${afterId || 0}`);
+  state.runSource = source;
+  source.onmessage = (message) => {
+    try { handleRunEvent(JSON.parse(message.data)); } catch { /* ignore */ }
+  };
+  source.onerror = () => { $("footer-status").textContent = "run event stream reconnecting…"; };
+}
+
+function handleRunEvent(event) {
+  state.events.push(event);
+  if (event.agent_id) {
+    if (event.type === "agent.started") state.agentStatus[event.agent_id] = "running";
+    if (event.type === "agent.completed") state.agentStatus[event.agent_id] = "completed";
+    if (event.type === "agent.failed") state.agentStatus[event.agent_id] = "failed";
+  }
+  if (event.type === "approval.required") state.agentStatus.dictator = "waiting";
+  if (["run.completed", "run.paused", "run.failed", "run.started", "run.resumed"].includes(event.type)) {
+    if (state.runId) loadRun(state.runId, false);
+    poll();
+  }
+  renderTimeline();
+  renderFlow();
+  renderOrgSummary();
+}
+
+// ------------------------------------------------------------------ flow
+const FLOW_ICONS = { idle: "○", running: "◌", completed: "✓", failed: "✕", waiting: "⏸", disabled: "–" };
+
+function renderFlow() {
+  const registry = state.registry?.registry;
+  const container = $("flow-nodes");
+  if (!registry) { container.innerHTML = `<div class="muted">Registry unavailable.</div>`; return; }
+  const agents = registry.agents || [];
+  const tiers = {};
+  agents.forEach((agent) => {
+    const tier = Number(agent.tier ?? 99);
+    (tiers[tier] ||= []).push(agent);
+  });
+  const tierMeta = Object.fromEntries((registry.tiers || []).map((t) => [Number(t.id), t.name]));
+  const nodeHtml = (agent, extraClass = "") => {
+    const status = state.agentStatus[agent.id] || (agent.enabled ? "idle" : "disabled");
+    return `
+      <div class="flow-node ${extraClass} status-${status}" data-node-id="${escapeHtml(agent.id)}" title="${escapeHtml(agent.mission || "")}">
+        <span class="node-icon">${FLOW_ICONS[status] || "○"}</span>
+        <div class="node-title">${escapeHtml(agent.title || agent.id)}</div>
+        <div class="node-sub">${escapeHtml(agent.model || "")} · ${agent.enabled ? status : "on-demand"}</div>
+      </div>
+    `;
+  };
+  const top = `
+    <div class="flow-top">
+      <div class="flow-node human status-${state.agentStatus.dictator || "idle"}" data-node-id="dictator">
+        <span class="node-icon">${FLOW_ICONS[state.agentStatus.dictator || "idle"]}</span>
+        <div class="node-title">Dictator</div>
+        <div class="node-sub">Human Product Owner</div>
+      </div>
+      <div class="flow-node orchestrator status-${state.agentStatus.chief_orchestrator || "idle"}" data-node-id="chief_orchestrator">
+        <span class="node-icon">${FLOW_ICONS[state.agentStatus.chief_orchestrator || "idle"]}</span>
+        <div class="node-title">Chief UI/UX Orchestrator</div>
+        <div class="node-sub">Tier 0 · routing · budgets</div>
+      </div>
+    </div>
+  `;
+  const tierHtml = Object.entries(tiers).filter(([tier]) => Number(tier) > 0).sort(([a], [b]) => Number(a) - Number(b)).map(([tier, tierAgents]) => `
+    <div class="flow-tier" data-tier="${tier}">
+      <div class="flow-tier-title">Tier ${tier} · ${escapeHtml(tierMeta[Number(tier)] || "")}</div>
+      <div class="flow-row">${tierAgents.map((agent) => nodeHtml(agent)).join("")}</div>
+    </div>
+  `).join("");
+  container.innerHTML = top + tierHtml;
+  container.querySelectorAll("[data-node-id]").forEach((el) => {
+    el.addEventListener("click", () => openAgentDetail(el.dataset.nodeId));
+  });
+  $("flow-event-count").textContent = String((state.events || []).length);
+  renderFlowEvents();
+  if (state.activeTab === "flow") requestAnimationFrame(drawFlowEdges);
+}
+
+function renderFlowEvents() {
+  const list = $("flow-event-list");
+  const events = state.events || [];
+  if (!events.length) {
+    list.innerHTML = `<div class="muted">No events for this run yet.</div>`;
+    return;
+  }
+  list.innerHTML = events.slice(-120).map((event) => `
+    <div class="event">
+      <span class="dot"></span>
+      <div class="body">
+        <div class="msg">${escapeHtml(event.message || event.type)}</div>
+        <div class="meta">${escapeHtml(event.agent_id || "system")} · ${escapeHtml(event.type)} · ${fmtTime(event.created_at)}</div>
+      </div>
+    </div>
+  `).join("");
+  list.scrollTop = list.scrollHeight;
+}
+
+function drawFlowEdges() {
+  const canvas = $("flow-canvas");
+  const svg = $("flow-edges");
+  const nodes = $("flow-nodes");
+  if (!canvas || !svg || !nodes || !canvas.offsetParent) return;
+  const width = nodes.scrollWidth;
+  const height = nodes.scrollHeight;
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.style.width = `${width}px`;
+  svg.style.height = `${height}px`;
+  const base = nodes.getBoundingClientRect();
+  const box = (el) => {
+    const rect = el.getBoundingClientRect();
+    return {
+      x: rect.left - base.left + rect.width / 2,
+      y: rect.top - base.top + rect.height / 2,
+      top: rect.top - base.top,
+      bottom: rect.top - base.top + rect.height,
+    };
+  };
+  const dict = document.querySelector('[data-node-id="dictator"]');
+  const orch = document.querySelector('[data-node-id="chief_orchestrator"]');
+  if (!dict || !orch) return;
+  const d = box(dict);
+  const o = box(orch);
+  let paths = "";
+  const edge = (a, b, color = "rgba(168,85,247,.22)") => {
+    const dy = Math.max(18, Math.abs(b.y - a.y) / 2);
+    paths += `<path d="M ${a.x} ${a.y} C ${a.x} ${a.y + dy}, ${b.x} ${b.y - dy}, ${b.x} ${b.y}" stroke="${color}" stroke-width="1.4" fill="none"/>`;
+  };
+  edge({ x: d.x, y: d.bottom }, { x: o.x, y: o.top }, "rgba(255,255,255,.28)");
+  const tiers = [...document.querySelectorAll(".flow-tier")];
+  for (const tier of tiers) {
+    const rect = tier.getBoundingClientRect();
+    const centerX = rect.left - base.left + rect.width / 2;
+    const topY = rect.top - base.top;
+    edge({ x: o.x, y: o.bottom + 4 }, { x: centerX, y: topY - 14 });
+  }
+  for (let i = 0; i < tiers.length - 1; i += 1) {
+    const a = tiers[i].getBoundingClientRect();
+    const b = tiers[i + 1].getBoundingClientRect();
+    const ax = a.left - base.left + a.width / 2;
+    const bx = b.left - base.left + b.width / 2;
+    edge({ x: ax, y: a.bottom - base.top }, { x: bx, y: b.top - base.top }, "rgba(168,85,247,.14)");
+  }
+  svg.innerHTML = `<defs><marker id="flow-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="rgba(168,85,247,.38)"/></marker></defs>${paths}`;
+}
+
+function openAgentDetail(agentId) {
+  if (agentId === "dictator") {
+    openModal("Dictator", "Human Product Owner / Manager", `<p class="muted">Final authority on direction, taste, risk, budget, overrides, and releases.</p>`);
+    return;
+  }
+  const agent = (state.registry?.registry?.agents || []).find((a) => a.id === agentId);
+  if (!agent) return;
+  const status = state.agentStatus[agentId] || (agent.enabled ? "idle" : "disabled");
+  const events = (state.events || []).filter((e) => e.agent_id === agentId);
+  const artifacts = (state.artifacts || []).filter((a) => a.created_by === agentId);
+  const usage = state.budget?.by_agent?.[agentId] || 0;
+  const last = events[events.length - 1];
+  const body = `
+    <div class="kv" style="margin-bottom:10px">
+      <span>Status</span><b class="badge ${statusClass(status)}">${escapeHtml(status)}</b>
+      <span>Model alias</span><b>${escapeHtml(agent.model || "—")}</b>
+      <span>Tier</span><b>${escapeHtml(agent.tier)}</b>
+      <span>Tokens</span><b>${fmtNumber(usage)}</b>
+    </div>
+    <p class="muted">${escapeHtml(agent.mission || "")}</p>
+    ${last ? `<h3 style="font-size:12px;margin-top:12px">Last event</h3><pre>${escapeHtml(JSON.stringify({ type: last.type, message: last.message, data: last.data }, null, 2))}</pre>` : ""}
+    <h3 style="font-size:12px;margin-top:12px">Artifacts (${artifacts.length})</h3>
+    <div class="list">${artifacts.length ? artifacts.map((a) => `<div class="item clickable" data-agent-artifact="${escapeHtml(a.name)}"><div class="title">${escapeHtml(a.name)}</div><div class="meta">${fmtTime(a.created_at)}</div></div>`).join("") : `<div class="muted">No artifacts produced by this agent yet.</div>`}</div>
+    <h3 style="font-size:12px;margin-top:12px">Recent agent events (${events.length})</h3>
+    <div class="timeline tall">${events.slice(-20).map((e) => `<div class="event"><span class="dot"></span><div class="body"><div class="msg">${escapeHtml(e.message || e.type)}</div><div class="meta">${escapeHtml(e.type)} · ${fmtTime(e.created_at)}</div></div></div>`).join("") || `<div class="muted">No events yet.</div>`}</div>
+  `;
+  openModal(agent.title || agent.id, agent.real_world_equivalent || "Agent detail", body, `<button class="btn ghost" data-close-modal>Close</button>`, (modal) => {
+    modal.querySelectorAll("[data-agent-artifact]").forEach((el) => {
+      el.addEventListener("click", () => { closeModal(); openArtifact(state.runId, el.dataset.agentArtifact); });
+    });
+  });
+}
+
+// ------------------------------------------------------------------ approvals
+function approvalCard(approval, compact = false) {
+  const options = (approval.options || []).map((option) => `<span class="chip">${escapeHtml(option.label)}</span>`).join("");
+  return `
+    <div class="approval-card">
+      <div class="title">${escapeHtml(approval.title)}</div>
+      <div class="meta">
+        <span class="badge ${statusClass(approval.status)}">${escapeHtml(approval.gate)}</span>
+        <span>${fmtTime(approval.created_at)}</span>
+        ${approval.run_id ? `<span>${escapeHtml(short(approval.run_id, 28))}</span>` : ""}
+      </div>
+      <div class="message">${escapeHtml(short(approval.message || "", compact ? 180 : 500))}</div>
+      ${options && !compact ? `<div class="meta" style="margin-top:7px">${options}</div>` : ""}
+      <div class="approval-actions">
+        <button class="btn small primary" data-approval="${escapeHtml(approval.approval_id)}" data-decision="approve">Approve</button>
+        <button class="btn small danger" data-approval="${escapeHtml(approval.approval_id)}" data-decision="reject">Reject</button>
+        <button class="btn small ghost" data-approval="${escapeHtml(approval.approval_id)}" data-decision="dictate">Dictate</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderApprovals() {
+  const productionRunIds = new Set((state.runs || []).map((run) => run.run_id));
+  const visible = (approval) => approval.gate === "evolution_approval" || !approval.run_id || productionRunIds.has(approval.run_id);
+  const pending = (state.approvals || []).filter(visible);
+  const all = (state.allApprovals || []).filter(visible);
+  $("approval-count").textContent = String(pending.length);
+  $("approval-badge").textContent = String(pending.length);
+  $("pending-approvals-count").textContent = String(pending.length);
+  const quick = $("approvals-quick");
+  const pendingEl = $("approvals-pending");
+  const historyEl = $("approvals-history");
+  if (!pending.length) {
+    quick.innerHTML = `<div class="muted">No decisions waiting. The company is operating within its mandate.</div>`;
+    pendingEl.innerHTML = `<div class="muted">No pending decisions.</div>`;
+  } else {
+    quick.innerHTML = pending.slice(0, 4).map((a) => approvalCard(a, true)).join("");
+    pendingEl.innerHTML = pending.map((a) => approvalCard(a, false)).join("");
+  }
+  const history = all.filter((a) => a.status !== "pending").slice(0, 80);
+  historyEl.innerHTML = history.length ? history.map((a) => `
+    <div class="item">
+      <div class="title">${escapeHtml(a.title)}</div>
+      <div class="meta">
+        <span class="badge ${statusClass(a.status)}">${escapeHtml(a.status)}</span>
+        <span>${escapeHtml(a.gate)}</span>
+        <span>${fmtTime(a.decided_at || a.created_at)}</span>
+        ${a.decision?.notes ? `<span>${escapeHtml(short(a.decision.notes, 80))}</span>` : ""}
+      </div>
+    </div>
+  `).join("") : `<div class="muted">No decisions recorded yet.</div>`;
+  document.querySelectorAll("[data-approval]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (button.dataset.decision === "dictate") openDictate(button.dataset.approval);
+      else decideApproval(button.dataset.approval, button.dataset.decision);
+    });
+  });
+}
+
+async function decideApproval(approvalId, decision, notes = "") {
+  try {
+    await api(`/api/approvals/${encodeURIComponent(approvalId)}/decide`, {
+      method: "POST",
+      body: JSON.stringify({ decision, notes: notes || `Dictator decision: ${decision}` }),
+    });
+    toast(`Decision recorded: ${decision}`);
+    await poll();
+    if (state.runId) await loadRun(state.runId, false);
+    if (state.evolutionId) await loadEvolution(state.evolutionId, false);
+  } catch (error) {
+    toast(`Approval error: ${error.message}`, "error");
+  }
+}
+
+function openDictate(approvalId) {
+  const body = `
+    <p class="muted">Write the Dictator's exact answer. It is recorded with the approval and, where the graph supports it, passed back as an override.</p>
+    <textarea id="dictate-text" placeholder="e.g. Keep the profile top bar to Settings + Share only. Move QR into the overflow menu."></textarea>
+  `;
+  openModal("Dictate your answer", "Approve, reject, or write your own decision.", body, `
+    <button class="btn ghost" data-close-modal>Cancel</button>
+    <button class="btn primary" id="send-dictate">Send dictate</button>
+  `, (modal) => {
+    modal.querySelector("#send-dictate").addEventListener("click", async () => {
+      const text = modal.querySelector("#dictate-text").value.trim();
+      if (!text) { toast("Write a dictate first.", "error"); return; }
+      closeModal();
+      await decideApproval(approvalId, "override", text);
+    });
+  });
+}
+
+// ------------------------------------------------------------------ target
+function renderTarget() {
+  const manifest = state.targetManifest || {};
+  const images = manifest.images || [];
+  const path = state.settings?.target_ui_dir || manifest.source_path || "—";
+  const status = manifest.status || "unknown";
+  $("target-path").textContent = path;
+  $("target-status").innerHTML = `<span class="badge ${statusClass(status)}">${escapeHtml(status)}</span> <span class="muted">${images.length} image(s) · ${escapeHtml(manifest.precedence || "tiered")} precedence</span>`;
+  $("target-mini").innerHTML = `<span class="badge ${statusClass(status)}">${escapeHtml(status)}</span> <span class="muted">${images.length} image(s)</span>`;
+  const thumbs = images.slice(0, 3).map((image) => `
+    <div class="thumb"><img src="/api/target-ui/image?path=${encodeURIComponent(image.file)}" alt="${escapeHtml(image.screen || "target")}" onerror="this.style.display='none'" /><span>${escapeHtml(image.screen || "unknown")}</span></div>
+  `).join("");
+  $("target-thumbs").innerHTML = thumbs;
+  $("target-images").innerHTML = images.length ? images.map((image) => `
+    <div class="target-card" data-target-image="${escapeHtml(image.file)}">
+      <img src="/api/target-ui/image?path=${encodeURIComponent(image.file)}" alt="${escapeHtml(image.screen || "target")}" onerror="this.style.display='none'" />
+      <div class="info">
+        <b>${escapeHtml(image.screen || "unknown")}</b>
+        ${escapeHtml(image.status)} · conf ${Number(image.confidence || 0).toFixed(2)}<br>
+        ${escapeHtml(short(image.file, 44))}
+      </div>
+    </div>
+  `).join("") : `<div class="muted">No Target_ui images found. Use Browse folder in Settings or Target_ui.</div>`;
+  const conflicts = [];
+  for (const image of images) {
+    for (const conflict of image.conflicts || []) conflicts.push({ screen: image.screen, conflict });
+  }
+  $("target-conflicts").innerHTML = conflicts.length ? conflicts.map((item) => `
+    <div class="item"><div class="title">${escapeHtml(item.screen || "screen")}</div><div class="meta">${escapeHtml(item.conflict)}</div></div>
+  `).join("") : `<div class="muted">No conflicts recorded. Confidence is stored per image.</div>`;
+  document.querySelectorAll("[data-target-image]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const file = el.dataset.targetImage;
+      openModal("Target_ui reference", file, `<img src="/api/target-ui/image?path=${encodeURIComponent(file)}" style="max-width:100%;border-radius:12px" />`);
+    });
+  });
+}
+
+async function scanTarget(analyze = false) {
+  const path = state.settings?.target_ui_dir;
+  if (!path) { toast("Set a Target_ui directory first.", "error"); return; }
+  const button = analyze ? $("analyze-target") : $("scan-target");
+  if (button) button.disabled = true;
+  try {
+    toast(analyze ? "Scanning and analyzing Target_ui…" : "Scanning Target_ui…");
+    state.targetManifest = await api("/api/target-ui/scan", {
+      method: "POST",
+      body: JSON.stringify({ path, analyze }),
+    });
+    renderTarget();
+    toast(analyze ? "Target_ui analyzed." : "Target_ui scanned.");
+  } catch (error) {
+    toast(`Target_ui error: ${error.message}`, "error");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+// ------------------------------------------------------------------ artifacts
+function renderArtifactsQuick() {
+  const artifacts = state.artifacts || [];
+  $("artifact-count").textContent = String(artifacts.length);
+  $("artifacts-quick").innerHTML = artifacts.length ? artifacts.slice(0, 8).map((artifact) => `
+    <div class="artifact" data-artifact="${escapeHtml(artifact.name)}">
+      ${escapeHtml(artifact.name)}
+      <span>${escapeHtml(artifact.created_by || "")} · ${fmtTime(artifact.created_at)}</span>
+    </div>
+  `).join("") : `<div class="muted">Artifacts appear as the run progresses.</div>`;
+  document.querySelectorAll("#artifacts-quick [data-artifact]").forEach((el) => {
+    el.addEventListener("click", () => openArtifact(state.runId, el.dataset.artifact));
+  });
+}
+
+function renderArtifactsTab() {
+  fillRunSelect($("artifact-run-select"), state.artifactRunId || state.runId);
+  const artifacts = state.artifacts || [];
+  const list = $("artifact-list");
+  list.innerHTML = artifacts.length ? artifacts.map((artifact) => `
+    <div class="artifact-row" data-artifact-name="${escapeHtml(artifact.name)}">
+      ${escapeHtml(artifact.name)}
+      <div class="meta">${escapeHtml(artifact.created_by || "")} · ${escapeHtml(artifact.content_type || "")} · ${fmtTime(artifact.created_at)}</div>
+    </div>
+  `).join("") : `<div class="muted">Select a run or wait for artifacts.</div>`;
+  list.querySelectorAll("[data-artifact-name]").forEach((el) => {
+    el.addEventListener("click", () => previewArtifact(state.artifactRunId || state.runId, el.dataset.artifactName));
+  });
+}
+
+async function loadArtifactsForRun(runId) {
+  if (!runId) return;
+  try {
+    const data = await api(`/api/runs/${encodeURIComponent(runId)}`);
+    state.artifactRunId = runId;
+    state.artifacts = data.artifacts || [];
+    renderArtifactsTab();
+  } catch (error) {
+    toast(`Artifacts error: ${error.message}`, "error");
+  }
+}
+
+function openArtifact(runId, name) {
+  switchTab("artifacts");
+  if (runId) state.artifactRunId = runId;
+  fillRunSelect($("artifact-run-select"), state.artifactRunId);
+  previewArtifact(state.artifactRunId, name);
+}
+
+async function previewArtifact(runId, name) {
+  if (!runId || !name) return;
+  const preview = $("artifact-preview");
+  preview.innerHTML = `<div class="muted">Loading ${escapeHtml(name)}…</div>`;
+  try {
+    const response = await fetch(`/api/artifacts/${encodeURIComponent(runId)}/${encodeURIComponent(name)}`);
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.startsWith("image/")) {
+      const blob = await response.blob();
+      preview.innerHTML = `<img src="${URL.createObjectURL(blob)}" alt="${escapeHtml(name)}" />`;
+      return;
+    }
+    const text = await response.text();
+    let rendered = text;
+    if (contentType.includes("json") || name.endsWith(".json")) {
+      try { rendered = JSON.stringify(JSON.parse(text), null, 2); } catch { /* keep text */ }
+    }
+    preview.innerHTML = `<h3 style="font-size:12px;margin-bottom:8px">${escapeHtml(name)}</h3><pre>${escapeHtml(rendered)}</pre>`;
+  } catch (error) {
+    preview.innerHTML = `<div class="muted">Could not load artifact: ${escapeHtml(error.message)}</div>`;
+  }
+}
+
+// ------------------------------------------------------------------ evolution
+function fillEvolutionSelect(selected) {
+  const select = $("evolution-select");
+  if (!select) return;
+  const proposals = state.evolutions || [];
+  select.innerHTML = "";
+  if (!proposals.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "No proposals";
+    select.appendChild(option);
+    return;
+  }
+  for (const proposal of proposals) {
+    const option = document.createElement("option");
+    option.value = proposal.proposal_id;
+    option.textContent = `${proposal.status} · ${short(evolutionTitle(proposal), 60)}`;
+    if (proposal.proposal_id === selected) option.selected = true;
+    select.appendChild(option);
+  }
+  if (selected) select.value = selected;
+}
+
+function evolutionTitle(item) {
+  if (item && item.status === "stopped" && ["Evolution audit running", "Evolution audit starting"].includes(item.title)) {
+    return "Evolution stopped before proposal";
+  }
+  return item?.title || "Evolution";
+}
+
+function defaultEvolutionId() {
+  const proposals = state.evolutions || [];
+  const active = proposals.find((p) => ["pending_approval", "evaluating", "proposed", "running"].includes(p.status));
+  return (active || proposals[0])?.proposal_id || null;
+}
+
+function renderEvolutions() {
+  const list = $("evolutions-quick");
+  const proposals = state.evolutions || [];
+  fillEvolutionSelect(state.evolutionId);
+  if (!proposals.length) {
+    list.innerHTML = `<div class="muted">No proposals yet. Start an audit from the Evolution tab.</div>`;
+    return;
+  }
+  list.innerHTML = proposals.slice(0, 8).map((item) => `
+    <div class="item clickable" data-evolution="${escapeHtml(item.proposal_id)}">
+      <div class="title">${escapeHtml(evolutionTitle(item))}</div>
+      <div class="meta">
+        <span class="badge ${statusClass(item.status)}">${escapeHtml(item.status)}</span>
+        <span>${fmtTime(item.created_at)}</span>
+      </div>
+    </div>
+  `).join("");
+  list.querySelectorAll("[data-evolution]").forEach((el) => {
+    el.addEventListener("click", () => openEvolution(el.dataset.evolution));
+  });
+}
+
+async function openEvolution(proposalId) {
+  switchTab("evolution");
+  state.evolutionId = proposalId;
+  await loadEvolution(proposalId, true);
+}
+
+async function startEvolution() {
+  const btn = $("evolution-start");
+  if (btn) btn.disabled = true;
+  try {
+    const response = await api("/api/evolve", {
+      method: "POST",
+      body: JSON.stringify({ focus: "quality", auto_approve: false }),
+    });
+    state.evolutionId = response.proposal_id;
+    switchTab("evolution");
+    await loadEvolution(response.proposal_id, true);
+    toast("Evolution audit started.");
+    await poll();
+  } catch (error) {
+    toast(`Evolution start error: ${error.message}`, "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function loadEvolution(proposalId, connect = false) {
+  if (!proposalId) return;
+  try {
+    const data = await api(`/api/evolve/${encodeURIComponent(proposalId)}`);
+    state.evolutionId = proposalId;
+    state.evolution = data;
+    state.evolutionEvents = data.events || [];
+    renderEvolution();
+    if (connect) connectEvolutionEvents(proposalId, state.evolutionEvents.length ? state.evolutionEvents[state.evolutionEvents.length - 1].id : 0);
+  } catch (error) {
+    if (String(error.message).includes("404")) {
+      state.evolutionId = proposalId;
+      state.evolution = { proposal: { proposal_id: proposalId, title: "Evolution audit starting", status: "evaluating" }, state: { values: {} }, events: [] };
+      state.evolutionEvents = [];
+      renderEvolution();
+      return;
+    }
+    toast(`Evolution load error: ${error.message}`, "error");
+  }
+}
+
+function connectEvolutionEvents(proposalId, afterId = 0) {
+  if (state.evolutionSource) state.evolutionSource.close();
+  const source = new EventSource(`/api/evolve/${encodeURIComponent(proposalId)}/events?after_id=${afterId || 0}`);
+  state.evolutionSource = source;
+  source.onmessage = (message) => {
+    try {
+      const event = JSON.parse(message.data);
+      state.evolutionEvents.push(event);
+      renderEvolution();
+      if (["evolution.proposed", "evolution.evaluated", "evolution.applied", "evolution.stopped", "approval.required"].includes(event.type)) {
+        loadEvolution(proposalId, false);
+        poll();
+      }
+    } catch { /* ignore */ }
+  };
+  source.onerror = () => { $("footer-status").textContent = "evolution event stream reconnecting…"; };
+}
+
+function renderEvolution() {
+  const record = state.evolution?.proposal || {};
+  const proposal = record.proposal || state.evolution?.state?.values?.proposal || {};
+  const evaluation = record.evaluation || state.evolution?.state?.values?.evaluation || null;
+  const values = state.evolution?.state?.values || {};
+  const status = record.status || values.status || "idle";
+  const events = state.evolutionEvents || [];
+  const has = (type) => events.some((event) => event.type === type);
+  const pending = Boolean(state.evolution?.pending) || (state.evolution?.state?.interrupts || []).length > 0 || (state.evolution?.state?.__interrupt__ || []).length > 0;
+  const terminal = ["applied", "rejected", "stopped"].includes(status);
+  const stopped = ["stopped", "rejected"].includes(status);
+  const auditorModel = events.find((event) => event.type === "agent.started" && event.agent_id === "org_evolution_auditor")?.data?.model;
+  $("evolution-status").textContent = status;
+  $("evolution-status").className = `status ${statusClass(status)}`;
+  $("evolution-stop").disabled = !state.evolutionId || terminal;
+  fillEvolutionSelect(state.evolutionId);
+  $("evolution-event-count").textContent = String(events.length);
+  const stageData = [
+    {
+      id: "observe",
+      label: "Observe",
+      name: "Org Observer",
+      status: has("evolution.observed") ? "completed" : (has("evolution.started") ? "running" : "idle"),
+      output: "Reads traces, rework, cost, gate failures, and budget pressure.",
+    },
+    {
+      id: "diagnose",
+      label: "Diagnose",
+      name: "Org Evolution Auditor",
+      status: has("evolution.proposed") ? "completed" : (stopped ? "stopped" : (has("agent.started") ? "running" : "idle")),
+      output: `${auditorModel ? `${auditorModel} · ` : ""}${proposal.title || (stopped ? "Stopped before a proposal was produced." : "Waiting for the independent auditor.")}`,
+    },
+    {
+      id: "evaluate",
+      label: "Evaluate",
+      name: "Eval Red Team",
+      status: has("evolution.evaluated") ? "completed" : (stopped ? "stopped" : (has("evolution.proposed") ? "running" : "idle")),
+      output: evaluation ? `${evaluation.verdict} · ${evaluation.shadow_eval || "shadow eval"}` : (stopped ? "Not evaluated." : "Waiting for evaluation."),
+    },
+    {
+      id: "approval",
+      label: "Approve",
+      name: "Dictator",
+      status: pending ? "waiting" : (record.decision ? "completed" : "idle"),
+      output: record.decision ? JSON.stringify(record.decision) : "Approve, reject, or dictate.",
+    },
+    {
+      id: "apply",
+      label: "Apply",
+      name: "Registry Service",
+      status: has("evolution.applied") || status === "applied" ? "completed" : "idle",
+      output: record.applied_version ? `Registry ${record.applied_version}` : "No registry change yet.",
+    },
+  ];
+  $("evolution-cards").innerHTML = stageData.map((stage) => `
+    <div class="evolution-card ${statusClass(stage.status)}" data-evolution-stage="${escapeHtml(stage.id)}">
+      <div class="stage">${escapeHtml(stage.label)}</div>
+      <div class="name">${escapeHtml(stage.name)}</div>
+      <div class="output">${escapeHtml(short(stage.output, 110))}</div>
+    </div>
+  `).join("");
+  document.querySelectorAll("[data-evolution-stage]").forEach((el) => {
+    el.addEventListener("click", () => openEvolutionOutput(el.dataset.evolutionStage, stageData));
+  });
+  const proposalEl = $("evolution-proposal");
+  if (!state.evolutionId) {
+    proposalEl.innerHTML = `<div class="muted">No evolution proposal selected. Start an audit or pick one from the Overview.</div>`;
+  } else {
+    proposalEl.innerHTML = `
+      <div class="card-head"><h2>${escapeHtml(evolutionTitle({ title: proposal.title, status }))}</h2><span class="badge ${statusClass(status)}">${escapeHtml(status)}</span></div>
+      <p class="muted">${escapeHtml(proposal.problem || "Waiting for the auditor to produce a proposal.")}</p>
+      <div class="proposal-block">
+        <h3>Changes</h3>
+        <pre>${escapeHtml(JSON.stringify(proposal.changes || [], null, 2))}</pre>
+      </div>
+      <div class="proposal-block">
+        <h3>Expected impact</h3>
+        <pre>${escapeHtml(JSON.stringify(proposal.expected_impact || {}, null, 2))}</pre>
+      </div>
+      <div class="proposal-block">
+        <h3>Risk & rollback</h3>
+        <p>${escapeHtml((proposal.risks || []).join(" · ") || "No risks recorded.")}</p>
+        <p>${escapeHtml(proposal.rollback_plan || "No rollback plan yet.")}</p>
+      </div>
+      ${evaluation ? `<div class="proposal-block"><h3>Evaluation</h3><pre>${escapeHtml(JSON.stringify(evaluation, null, 2))}</pre></div>` : ""}
+      <div class="approval-actions">
+        ${pending || status === "pending_approval" ? `
+          <button class="btn primary small" id="evolution-approve">Approve</button>
+          <button class="btn danger small" id="evolution-reject">Reject</button>
+          <button class="btn ghost small" id="evolution-dictate">Dictate</button>
+        ` : ""}
+        <button class="btn ghost small" id="evolution-stop-inline" ${terminal ? "disabled" : ""}>Stop</button>
+      </div>
+    `;
+    $("evolution-approve")?.addEventListener("click", () => decideEvolution("approve"));
+    $("evolution-reject")?.addEventListener("click", () => decideEvolution("reject"));
+    $("evolution-dictate")?.addEventListener("click", openEvolutionDictate);
+    $("evolution-stop-inline")?.addEventListener("click", stopEvolution);
+  }
+  const eventList = $("evolution-events");
+  eventList.innerHTML = events.length ? events.slice(-100).map((event) => `
+    <div class="event">
+      <span class="dot"></span>
+      <div class="body">
+        <div class="msg">${escapeHtml(event.message || event.type)}</div>
+        <div class="meta">${escapeHtml(event.agent_id || "system")} · ${escapeHtml(event.type)} · ${fmtTime(event.created_at)}</div>
+      </div>
+    </div>
+  `).join("") : `<div class="muted">Evolution events will stream here.</div>`;
+  eventList.scrollTop = eventList.scrollHeight;
+}
+
+function openEvolutionOutput(stageId, stageData) {
+  const stage = stageData.find((item) => item.id === stageId);
+  const events = state.evolutionEvents || [];
+  const relevant = events.filter((event) => {
+    if (stageId === "observe") return event.type === "evolution.observed" || event.type === "evolution.started";
+    if (stageId === "diagnose") return event.type === "evolution.proposed" || event.agent_id === "org_evolution_auditor";
+    if (stageId === "evaluate") return event.type === "evolution.evaluated";
+    if (stageId === "approval") return event.type === "approval.required" || event.type === "evolution.decided";
+    if (stageId === "apply") return event.type === "evolution.applied";
+    return false;
+  });
+  const body = `
+    <p class="muted">${escapeHtml(stage?.output || "")}</p>
+    <h3 style="font-size:12px;margin-top:12px">Agent events</h3>
+    <pre>${escapeHtml(JSON.stringify(relevant, null, 2))}</pre>
+    <h3 style="font-size:12px;margin-top:12px">Proposal</h3>
+    <pre>${escapeHtml(JSON.stringify(state.evolution?.proposal?.proposal || {}, null, 2))}</pre>
+  `;
+  openModal(stage?.name || "Evolution stage", stage?.label || "", body);
+}
+
+async function stopEvolution() {
+  if (!state.evolutionId) return;
+  try {
+    await api(`/api/evolve/${encodeURIComponent(state.evolutionId)}/stop`, { method: "POST" });
+    toast("Evolution stopped.");
+    await loadEvolution(state.evolutionId, false);
+    await poll();
+  } catch (error) {
+    toast(`Stop error: ${error.message}`, "error");
+  }
+}
+
+async function decideEvolution(decision, notes = "") {
+  if (!state.evolutionId) return;
+  try {
+    await api(`/api/evolve/${encodeURIComponent(state.evolutionId)}/approve`, {
+      method: "POST",
+      body: JSON.stringify({ decision, notes: notes || `Dictator decision: ${decision}` }),
+    });
+    toast(`Evolution decision: ${decision}`);
+    await loadEvolution(state.evolutionId, false);
+    await poll();
+  } catch (error) {
+    toast(`Evolution decision error: ${error.message}`, "error");
+  }
+}
+
+function openEvolutionDictate() {
+  const body = `<p class="muted">Write the exact Dictator decision. It is recorded as an override with your rationale.</p><textarea id="evolution-dictate-text" placeholder="e.g. Approve only the content-design gate; do not change the model routing yet."></textarea>`;
+  openModal("Dictate evolution decision", "The auditor cannot approve its own proposal.", body, `
+    <button class="btn ghost" data-close-modal>Cancel</button>
+    <button class="btn primary" id="evolution-send-dictate">Send dictate</button>
+  `, (modal) => {
+    modal.querySelector("#evolution-send-dictate").addEventListener("click", async () => {
+      const text = modal.querySelector("#evolution-dictate-text").value.trim();
+      if (!text) { toast("Write a dictate first.", "error"); return; }
+      closeModal();
+      await decideEvolution("override", text);
+    });
+  });
+}
+
+// ------------------------------------------------------------------ settings
+function renderSettings() {
+  const s = state.settings;
+  if (!s) return;
+  $("settings-project-dir").textContent = s.project_dir || "—";
+  $("settings-target-dir").textContent = s.target_ui_dir || "—";
+  $("settings-budget").textContent = fmtNumber(s.monthly_token_budget);
+  $("settings-autonomy").value = s.autonomy_level || "L2";
+  fillModelSelect($("settings-model"), s.model);
+  fillModelSelect($("model-select"), s.model);
+  fillModelSelect($("run-model"), s.model);
+  $("settings-runtime").innerHTML = `
+    <span>Backend</span><b>${escapeHtml(s.backend)}</b>
+    <span>Registry</span><b>${escapeHtml(s.registry_version)}</b>
+    <span>Project</span><b>${escapeHtml(short(s.project_dir, 42))}</b>
+    <span>Target_ui</span><b>${escapeHtml(short(s.target_ui_dir, 42))}</b>
+  `;
+}
+
+async function saveBudget(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 1_000_000) {
+    toast("Budget must be at least 1,000,000 tokens.", "error");
+    return;
+  }
+  await saveSettings({ monthly_token_budget: Math.round(number) });
+  closeModal();
+}
+
+function openBudgetEditor() {
+  const current = state.settings?.monthly_token_budget || state.budget?.monthly_total_tokens || 100_000_000;
+  const body = `
+    <p class="muted">Set the monthly total-token ceiling. This is persisted in <code>org/budget_policy.yaml</code> and <code>.runtime/settings.json</code>.</p>
+    <input id="budget-input" type="number" min="1000000" step="1000000" value="${Number(current)}" style="width:100%;background:rgba(0,0,0,.55);color:#fff;border:1px solid var(--border);border-radius:12px;padding:11px;font-size:15px" />
+  `;
+  openModal("Edit monthly token budget", "Hard ceiling for all model usage.", body, `
+    <button class="btn ghost" data-close-modal>Cancel</button>
+    <button class="btn primary" id="save-budget">Save budget</button>
+  `, (modal) => {
+    modal.querySelector("#save-budget").addEventListener("click", () => saveBudget(modal.querySelector("#budget-input").value));
+  });
+}
+
+async function openFolderBrowser(kind) {
+  const key = kind === "project" ? "project_dir" : "target_ui_dir";
+  const start = state.settings?.[key] || (kind === "project" ? state.health?.project_dir : state.health?.target_ui_dir) || "";
+  await showFolder(start, kind);
+}
+
+async function showFolder(path, kind) {
+  try {
+    const data = await api(`/api/fs/list?path=${encodeURIComponent(path || "")}`);
+    const rows = (data.directories || []).map((dir) => `
+      <div class="folder-row" data-folder="${escapeHtml(dir.path)}">
+        <span class="folder-icon">▸</span>
+        <span>${escapeHtml(dir.name)}</span>
+      </div>
+    `).join("");
+    const body = `
+      <div class="folder-path">${escapeHtml(data.path)}</div>
+      <div class="folder-list">${rows || `<div class="muted">No subdirectories.</div>`}</div>
+    `;
+    openModal(
+      kind === "project" ? "Select project directory" : "Select Target_ui directory",
+      "Only directories are shown. Hidden folders are omitted.",
+      body,
+      `<button class="btn ghost" data-close-modal>Cancel</button>
+       ${data.parent ? `<button class="btn ghost" id="folder-up">Up</button>` : ""}
+       <button class="btn primary" id="folder-select">Select this folder</button>`,
+      (modal) => {
+        modal.querySelectorAll("[data-folder]").forEach((el) => {
+          el.addEventListener("click", () => showFolder(el.dataset.folder, kind));
+        });
+        modal.querySelector("#folder-up")?.addEventListener("click", () => showFolder(data.parent, kind));
+        modal.querySelector("#folder-select")?.addEventListener("click", async () => {
+          await saveSettings({ [key]: data.path });
+          closeModal();
+          if (kind === "target") await scanTarget(false);
+        });
+      },
+    );
+  } catch (error) {
+    toast(`Folder browse error: ${error.message}`, "error");
+  }
+}
+
+// ------------------------------------------------------------------ modal
+function openModal(title, sub, bodyHtml, actionsHtml = `<button class="btn ghost" data-close-modal>Close</button>`, onMount = null) {
+  const root = $("modal-root");
+  root.innerHTML = `
+    <div class="modal" id="modal">
+      <div class="modal-card">
+        <h2>${escapeHtml(title)}</h2>
+        ${sub ? `<div class="modal-sub">${escapeHtml(sub)}</div>` : ""}
+        ${bodyHtml}
+        <div class="modal-actions">${actionsHtml}</div>
+      </div>
+    </div>
+  `;
+  const modal = $("modal");
+  modal.addEventListener("click", (event) => { if (event.target === modal) closeModal(); });
+  modal.querySelectorAll("[data-close-modal]").forEach((el) => el.addEventListener("click", closeModal));
+  if (onMount) onMount(modal);
+}
+
+function closeModal() {
+  $("modal-root").innerHTML = "";
+}
+
+// ------------------------------------------------------------------ events / wiring
+$("tabs").addEventListener("click", (event) => {
+  const tab = event.target.closest(".tab");
+  if (tab) switchTab(tab.dataset.tab);
+});
+$("open-flow").addEventListener("click", () => switchTab("flow"));
+$("open-evolution").addEventListener("click", () => switchTab("evolution"));
+$("flow-run-select").addEventListener("change", (event) => { loadRun(event.target.value, true); });
+$("flow-refresh").addEventListener("click", () => { if (state.flowRunId) loadRun(state.flowRunId, true); });
+$("artifact-run-select").addEventListener("change", (event) => { loadArtifactsForRun(event.target.value); });
+$("upload-screenshots").addEventListener("click", () => $("screenshot-input").click());
+$("screenshot-input").addEventListener("change", async (event) => {
+  const runId = state.artifactRunId || state.runId;
+  if (!runId || !event.target.files.length) return;
+  const form = new FormData();
+  for (const file of event.target.files) form.append("files", file);
+  try {
+    await fetch(`/api/runs/${encodeURIComponent(runId)}/screenshots`, { method: "POST", body: form });
+    toast("Screenshots uploaded as QA evidence.");
+    if (runId === state.runId) await loadRun(runId, false);
+  } catch (error) {
+    toast(`Screenshot upload error: ${error.message}`, "error");
+  } finally {
+    event.target.value = "";
+  }
+});
+$("run-btn").addEventListener("click", startRun);
+$("overview-scan-target").addEventListener("click", () => { switchTab("target"); scanTarget(false); });
+$("scan-target").addEventListener("click", () => scanTarget(false));
+$("analyze-target").addEventListener("click", () => scanTarget(true));
+$("browse-target").addEventListener("click", () => openFolderBrowser("target"));
+$("browse-target-settings").addEventListener("click", () => openFolderBrowser("target"));
+$("browse-project").addEventListener("click", () => openFolderBrowser("project"));
+$("budget-pill").addEventListener("click", openBudgetEditor);
+$("edit-budget-settings").addEventListener("click", openBudgetEditor);
+$("settings-budget").addEventListener("click", openBudgetEditor);
+$("refresh-models").addEventListener("click", async () => { await loadModels(true); toast("OpenCode model list refreshed."); });
+$("model-select").addEventListener("change", async (event) => { await saveSettings({ model: event.target.value }); });
+$("settings-model").addEventListener("change", async (event) => { await saveSettings({ model: event.target.value }); });
+$("settings-autonomy").addEventListener("change", async (event) => { await saveSettings({ autonomy_level: event.target.value }); });
+$("evolve-btn").addEventListener("click", () => {
+  const status = state.evolution?.proposal?.status || "";
+  const active = state.evolutionId && !["applied", "rejected", "stopped"].includes(status);
+  if (active) {
+    switchTab("evolution");
+    loadEvolution(state.evolutionId, true);
+  } else {
+    startEvolution();
+  }
+});
+$("evolution-start").addEventListener("click", startEvolution);
+$("evolution-stop").addEventListener("click", stopEvolution);
+$("evolution-select").addEventListener("change", (event) => { if (event.target.value) openEvolution(event.target.value); });
+window.addEventListener("resize", () => { if (state.activeTab === "flow") drawFlowEdges(); });
+window.addEventListener("hashchange", () => {
+  const name = location.hash.replace("#", "");
+  if (name) switchTab(name);
+});
+$("purge-mock").addEventListener("click", () => {
+  openModal(
+    "Purge mock/demo data?",
+    "This removes local mock runs, approvals, artifacts, and mock token rows. Real OpenCode runs are untouched.",
+    `<p class="muted">The dashboard no longer shows mock runs, but older mock data may still exist in the local database. This cleans it.</p>`,
+    `<button class="btn ghost" data-close-modal>Cancel</button><button class="btn danger" id="confirm-purge">Purge</button>`,
+    (modal) => {
+      modal.querySelector("#confirm-purge").addEventListener("click", async () => {
+        try {
+          const result = await api("/api/admin/purge-mock", { method: "POST" });
+          closeModal();
+          toast(`Purged ${result.runs} mock runs and ${result.token_rows} token rows.`);
+          await poll();
+          await loadModels(false);
+        } catch (error) {
+          toast(`Purge error: ${error.message}`, "error");
+        }
+      });
+    },
+  );
+});
+document.addEventListener("DOMContentLoaded", init);
 
 async function startRun() {
   const prompt = $("decree").value.trim();
   if (!prompt) { $("decree").focus(); return; }
-  $("run-btn").disabled = true;
+  const button = $("run-btn");
+  button.disabled = true;
   $("run-status").textContent = "queued";
   $("run-status").className = "status running";
   state.events = [];
@@ -355,116 +1360,23 @@ async function startRun() {
       body: JSON.stringify({
         prompt,
         mode: $("mode").value,
-        backend: $("backend").value,
+        backend: "opencode",
+        model: $("run-model").value || $("model-select").value || null,
         target_ui_enabled: $("target-ui").checked,
-        demo: $("demo").checked,
         auto_approve: $("auto-approve").checked,
+        demo: false,
       }),
     });
     state.runId = response.run_id;
+    state.flowRunId = response.run_id;
     await loadRun(response.run_id, true);
-    $("footer-status").textContent = `run ${response.run_id} started`;
+    switchTab("flow");
+    toast(`Run started: ${response.run_id}`);
   } catch (error) {
-    $("footer-status").textContent = `run error: ${error.message}`;
     $("run-status").textContent = "failed";
     $("run-status").className = "status failed";
-  } finally {
-    $("run-btn").disabled = false;
-  }
-}
-
-function renderEvolutions() {
-  const list = $("evolutions");
-  const proposals = state.evolutions || [];
-  if (!proposals.length) {
-    list.innerHTML = `<div class="muted">No proposals yet. The Evolve button asks the independent auditor for one.</div>`;
-    return;
-  }
-  list.innerHTML = proposals.slice(0, 8).map((item) => `
-    <div class="item clickable" data-evo="${escapeHtml(item.proposal_id)}">
-      <div class="title">${escapeHtml(item.title)}</div>
-      <div class="meta">
-        <span class="badge ${escapeHtml(item.status)}">${escapeHtml(item.status)}</span>
-        <span>${fmtTime(item.created_at)}</span>
-      </div>
-    </div>
-  `).join("");
-  list.querySelectorAll("[data-evo]").forEach((el) => {
-    el.addEventListener("click", () => showEvolution(el.dataset.evo));
-  });
-}
-
-async function showEvolution(proposalId) {
-  try {
-    const data = await api(`/api/evolve/${encodeURIComponent(proposalId)}`);
-    state.evolution = data;
-    renderEvolutionDetail();
-  } catch (error) {
-    $("footer-status").textContent = `evolution load error: ${error.message}`;
-  }
-}
-
-function renderEvolutionDetail() {
-  const data = state.evolution;
-  const detail = $("evolution-detail");
-  if (!data) { detail.innerHTML = ""; return; }
-  const proposal = data.proposal?.proposal || data.proposal || {};
-  const evaluation = data.proposal?.evaluation || data.evaluation || null;
-  const pending = ((data.state?.interrupts || data.state?.__interrupt__ || [])).length > 0;
-  detail.innerHTML = `
-    <div class="item" style="margin-top:8px">
-      <div class="title">${escapeHtml(proposal.title || "Evolution proposal")}</div>
-      <div class="muted" style="margin-top:6px">${escapeHtml(proposal.problem || "")}</div>
-      <pre style="white-space:pre-wrap;max-height:240px;overflow:auto;font-size:10px;background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:10px;padding:8px;margin-top:8px">${escapeHtml(JSON.stringify(proposal.changes || [], null, 2))}</pre>
-      ${evaluation ? `<div class="meta"><span class="badge ${evaluation.verdict === "PASS" ? "pass" : "pending"}">${escapeHtml(evaluation.verdict)}</span><span>${escapeHtml(evaluation.shadow_eval || "")}</span></div>` : ""}
-      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-        ${pending ? `<button class="btn small primary" data-evo-decision="approve">Approve & apply safe changes</button>
-        <button class="btn small danger" data-evo-decision="reject">Reject</button>` : ""}
-      </div>
-    </div>
-  `;
-  detail.querySelectorAll("[data-evo-decision]").forEach((button) => {
-    button.addEventListener("click", () => decideEvolution(proposal.proposal_id || data.proposal?.proposal_id, button.dataset.evoDecision));
-  });
-}
-
-async function runEvolution() {
-  const button = $("evolve-btn");
-  button.disabled = true;
-  button.textContent = "✦ Auditing…";
-  $("evolution-detail").innerHTML = `<div class="muted" style="margin-top:8px">The independent org auditor is reading traces, rework, budget, and gate evidence…</div>`;
-  try {
-    const result = await api("/api/evolve", {
-      method: "POST",
-      body: JSON.stringify({ focus: "quality", auto_approve: false }),
-    });
-    state.evolution = { proposal: result.proposal, state: result, evaluation: result.evaluation };
-    await poll();
-    renderEvolutionDetail();
-  } catch (error) {
-    $("evolution-detail").innerHTML = `<div class="muted">Evolution error: ${escapeHtml(error.message)}</div>`;
+    toast(`Run error: ${error.message}`, "error");
   } finally {
     button.disabled = false;
-    button.textContent = "✦ Evolve / Improve";
   }
 }
-
-async function decideEvolution(proposalId, decision) {
-  if (!proposalId) return;
-  try {
-    const result = await api(`/api/evolve/${encodeURIComponent(proposalId)}/approve`, {
-      method: "POST",
-      body: JSON.stringify({ decision, notes: `Decision from control room: ${decision}` }),
-    });
-    state.evolution = { proposal: result.proposal, state: result };
-    await poll();
-    renderEvolutionDetail();
-  } catch (error) {
-    $("footer-status").textContent = `evolution decision error: ${error.message}`;
-  }
-}
-
-$("run-btn").addEventListener("click", startRun);
-$("scan-target").addEventListener("click", scanTarget);
-$("evolve-btn").addEventListener("click", runEvolution);
-document.addEventListener("DOMContentLoaded", init);

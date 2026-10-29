@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-from contextlib import asynccontextmanager
+import re
+import shutil
+import time
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +17,7 @@ from pydantic import BaseModel
 
 from .agents import AgentRunner
 from .artifacts import ArtifactStore
-from .config import Settings
+from .config import Settings, save_runtime_settings
 from .events import EventBus
 from .evolution import EvolutionEngine
 from .gateway import ModelGateway
@@ -30,11 +33,23 @@ class TargetScanRequest(BaseModel):
     analyze: bool = True
 
 
+class SettingsUpdate(BaseModel):
+    model: str | None = None
+    monthly_token_budget: int | None = None
+    project_dir: str | None = None
+    target_ui_dir: str | None = None
+    autonomy_level: str | None = None
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     registry = load_registry(settings)
     profile = load_profile(settings)
     budget = load_budget(settings)
+    if settings.project_dir:
+        profile.data.setdefault("project", {})["repo"] = str(settings.project_dir)
+    if settings.model_override:
+        settings.opencode_model = settings.model_override
     storage = Storage(settings.storage_db)
     bus = EventBus(storage)
     artifacts = ArtifactStore(settings, storage)
@@ -91,6 +106,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.company = company
     app.state.evolution = evolution
     app.state.tasks = set()
+    app.state.evolution_tasks: dict[str, asyncio.Task] = {}
+    app.state.opencode_models_cache: dict[str, Any] | None = None
+    app.state.opencode_models_cached_at: float = 0.0
 
     static_dir = Path(__file__).parent / "static"
     if static_dir.exists():
@@ -129,7 +147,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "version": "0.1.0",
             "registry_version": registry.version,
             "model_backend": settings.model_backend,
-            "model": settings.opencode_model,
+            "model": settings.model_override or settings.opencode_model,
+            "project_dir": str(settings.project_dir or profile.project.get("repo") or ""),
+            "target_ui_dir": str(settings.target_ui_path),
             "autonomy_level": settings.autonomy_level,
             "budget": storage.budget_summary(settings.monthly_token_budget),
             "roborezzi": False,
@@ -158,6 +178,144 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         summary["policy"] = budget.data
         return summary
 
+    def _effective_project_dir() -> str:
+        return str(settings.project_dir or profile.project.get("repo") or "")
+
+    @app.get("/api/settings")
+    async def get_settings():
+        return {
+            "project_dir": _effective_project_dir(),
+            "target_ui_dir": str(settings.target_ui_path),
+            "model": settings.model_override or settings.opencode_model,
+            "monthly_token_budget": settings.monthly_token_budget,
+            "autonomy_level": settings.autonomy_level,
+            "backend": settings.model_backend,
+            "registry_version": registry.version,
+        }
+
+    @app.put("/api/settings")
+    async def update_settings(request: SettingsUpdate):
+        updates: dict[str, Any] = {}
+        if request.model:
+            settings.model_override = request.model
+            settings.opencode_model = request.model
+            updates["model"] = request.model
+        if request.monthly_token_budget is not None:
+            if request.monthly_token_budget < 1_000_000:
+                raise HTTPException(status_code=400, detail="monthly_token_budget must be at least 1,000,000")
+            settings.monthly_token_budget = int(request.monthly_token_budget)
+            budget.data["monthly_total_tokens"] = int(request.monthly_token_budget)
+            # Preserve comments/formatting in the policy file; only replace the value.
+            original = budget.path.read_text(encoding="utf-8")
+            updated_text = re.sub(
+                r"(?m)^(monthly_total_tokens:\s*)\d+",
+                rf"\g<1>{int(request.monthly_token_budget)}",
+                original,
+            )
+            budget.path.write_text(updated_text, encoding="utf-8")
+            updates["monthly_token_budget"] = int(request.monthly_token_budget)
+        if request.project_dir:
+            path = Path(request.project_dir).expanduser().resolve()
+            if not path.is_dir():
+                raise HTTPException(status_code=400, detail="project_dir must be an existing directory")
+            settings.project_dir = path
+            profile.data.setdefault("project", {})["repo"] = str(path)
+            updates["project_dir"] = str(path)
+        if request.target_ui_dir:
+            path = Path(request.target_ui_dir).expanduser().resolve()
+            if not path.is_dir():
+                raise HTTPException(status_code=400, detail="target_ui_dir must be an existing directory")
+            settings.target_ui_path = path
+            profile.data.setdefault("target_ui", {})["path"] = str(path)
+            updates["target_ui_dir"] = str(path)
+        if request.autonomy_level:
+            if request.autonomy_level not in {"L0", "L1", "L2", "L3", "L4"}:
+                raise HTTPException(status_code=400, detail="autonomy_level must be L0..L4")
+            settings.autonomy_level = request.autonomy_level
+            updates["autonomy_level"] = request.autonomy_level
+        if updates:
+            save_runtime_settings(settings, **updates)
+        return await get_settings()
+
+    @app.get("/api/fs/list")
+    async def list_directories(path: str | None = None):
+        root = Path(path).expanduser().resolve() if path else Path.home()
+        if not root.exists() or not root.is_dir():
+            raise HTTPException(status_code=400, detail="path is not a directory")
+        directories = []
+        try:
+            for entry in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+                if entry.is_dir() and not entry.name.startswith("."):
+                    directories.append({"name": entry.name, "path": str(entry.resolve())})
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail="permission denied") from exc
+        return {
+            "path": str(root),
+            "parent": str(root.parent) if root.parent != root else None,
+            "directories": directories,
+        }
+
+    @app.post("/api/admin/purge-mock")
+    async def purge_mock_data():
+        result = storage.purge_mock_data()
+        for run_id in result.get("purged_run_ids", []):
+            shutil.rmtree(settings.artifacts_dir / "runs" / run_id, ignore_errors=True)
+        await bus.publish(
+            "admin",
+            "admin.purged_mock",
+            "Mock/demo data purged",
+            "dictator",
+            result,
+        )
+        return result
+
+    @app.get("/api/opencode/models")
+    async def opencode_models(refresh: bool = False):
+        now = time.time()
+        if (
+            not refresh
+            and app.state.opencode_models_cache
+            and now - app.state.opencode_models_cached_at < 120
+        ):
+            return app.state.opencode_models_cache
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                settings.opencode_bin,
+                "models",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=60)
+            stdout = stdout_b.decode("utf-8", errors="replace")
+            stderr = stderr_b.decode("utf-8", errors="replace")
+            models = []
+            for line in stdout.splitlines():
+                candidate = line.strip()
+                if not candidate or " " in candidate or "/" not in candidate:
+                    continue
+                models.append(candidate)
+            grouped: dict[str, list[str]] = {}
+            for model in models:
+                provider = model.split("/", 1)[0]
+                grouped.setdefault(provider, []).append(model)
+            payload = {
+                "models": models,
+                "grouped": grouped,
+                "default": settings.model_override or settings.opencode_model,
+                "raw": stdout[-4000:],
+                "stderr": stderr[-2000:],
+            }
+            app.state.opencode_models_cache = payload
+            app.state.opencode_models_cached_at = now
+            return payload
+        except Exception as exc:
+            return {
+                "models": [],
+                "grouped": {},
+                "default": settings.model_override or settings.opencode_model,
+                "error": str(exc),
+            }
+
     # -------------------------------------------------------------- target ui
     @app.get("/api/target-ui")
     async def target_ui_status():
@@ -166,7 +324,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/target-ui/scan")
     async def target_ui_scan(request: TargetScanRequest):
-        path = Path(request.path).expanduser() if request.path else None
+        path = Path(request.path).expanduser() if request.path else settings.target_ui_path
         manifest = scan_target_ui(
             settings,
             profile,
@@ -178,6 +336,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 manifest,
                 agent_runner=agents,
                 backend=settings.model_backend,
+                model=settings.model_override,
                 max_images=int(profile.target_ui.get("max_images_per_run", 8)),
             )
             save_manifest(settings, profile, manifest)
@@ -208,6 +367,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 target_ui_enabled=request.target_ui_enabled,
                 demo=request.demo,
                 backend=request.backend,
+                model=request.model or settings.model_override,
                 autonomy_level=request.autonomy_level,
                 run_id=run_id,
             )
@@ -302,7 +462,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/approvals")
     async def list_approvals(status: str | None = "pending", limit: int = 100):
-        return {"approvals": storage.list_approvals(status, limit)}
+        query_status = None if status in {None, "", "all"} else status
+        return {"approvals": storage.list_approvals(query_status, limit)}
 
     @app.post("/api/approvals/{approval_id}/decide")
     async def decide_approval(approval_id: str, decision: ApprovalDecision):
@@ -323,12 +484,46 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # -------------------------------------------------------------- evolution
     @app.post("/api/evolve")
     async def evolve(request: EvolutionRequest):
-        result = await evolution.start(
+        proposal_id = new_id("evo")
+        storage.create_evolution(
+            {
+                "proposal_id": proposal_id,
+                "title": "Evolution audit running",
+                "problem": "The independent auditor is observing traces, rework, cost, and gates.",
+                "evidence": [],
+                "changes": [],
+                "expected_impact": {},
+                "risks": [],
+                "eval_plan": [],
+                "rollback_plan": "No change applied yet.",
+                "status": "evaluating",
+            },
             focus=request.focus,
-            auto_approve=bool(request.auto_approve) if request.auto_approve is not None else False,
-            backend=settings.model_backend,
         )
-        return result
+
+        async def _run_evolution():
+            try:
+                await evolution.start(
+                    focus=request.focus,
+                    auto_approve=bool(request.auto_approve) if request.auto_approve is not None else False,
+                    backend=settings.model_backend,
+                    model=settings.model_override,
+                    proposal_id=proposal_id,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                await bus.publish(
+                    proposal_id,
+                    "evolution.failed",
+                    f"Evolution failed: {exc}",
+                    "org_evolution_auditor",
+                    {"error": str(exc)},
+                )
+
+        task = _spawn(_run_evolution())
+        app.state.evolution_tasks[proposal_id] = task
+        return {"proposal_id": proposal_id, "status": "running"}
 
     @app.get("/api/evolve")
     async def list_evolutions(limit: int = 50):
@@ -340,13 +535,48 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not proposal:
             raise HTTPException(status_code=404, detail="proposal not found")
         state = await evolution.get_state(proposal_id)
-        return {"proposal": proposal, "state": state, "artifacts": storage.list_artifacts(proposal_id)}
+        return {
+            "proposal": proposal,
+            "state": state,
+            "artifacts": storage.list_artifacts(proposal_id),
+            "events": storage.list_events(proposal_id, limit=300),
+            "pending": bool(storage.pending_approval_for_run(proposal_id, "evolution_approval")),
+        }
+
+    @app.get("/api/evolve/{proposal_id}/events")
+    async def stream_evolution_events(proposal_id: str, after_id: int = 0):
+        if not storage.get_evolution(proposal_id):
+            raise HTTPException(status_code=404, detail="proposal not found")
+
+        async def gen():
+            async for event in bus.stream(proposal_id, after_id=after_id):
+                yield f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
+
+        return StreamingResponse(
+            gen(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @app.post("/api/evolve/{proposal_id}/stop")
+    async def stop_evolution(proposal_id: str):
+        proposal = storage.get_evolution(proposal_id)
+        if not proposal:
+            raise HTTPException(status_code=404, detail="proposal not found")
+        task = app.state.evolution_tasks.get(proposal_id)
+        if task and not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        return await evolution.stop(proposal_id)
 
     @app.post("/api/evolve/{proposal_id}/approve")
     async def approve_evolution(proposal_id: str, decision: ApprovalDecision):
         proposal = storage.get_evolution(proposal_id)
         if not proposal:
             raise HTTPException(status_code=404, detail="proposal not found")
+        if proposal["status"] in {"stopped", "rejected"}:
+            raise HTTPException(status_code=409, detail=f"proposal is {proposal['status']}")
         result = await evolution.resume(proposal_id, decision.model_dump())
         return result
 

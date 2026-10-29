@@ -129,6 +129,7 @@ async def analyze_manifest(
     run_id: str | None = None,
     max_images: int | None = None,
     backend: str | None = None,
+    model: str | None = None,
 ) -> TargetManifest:
     if not manifest.images:
         manifest.status = "not_available"
@@ -153,6 +154,7 @@ async def analyze_manifest(
                 run_id=run_id,
                 task_id=f"target_ui:{image.image_id}",
                 backend=backend,
+                model=model,
             )
             data = result.data
             image.extracted = data

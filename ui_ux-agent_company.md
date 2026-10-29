@@ -669,19 +669,22 @@ A dependency-free SPA served by FastAPI:
 - `src/ui_ux_company/static/styles.css`
 - `src/ui_ux_company/static/app.js`
 
-It provides:
+It is organized into tabs:
 
-- Dictator decree composer
-- Mode/backend/Target_ui/demo/auto-approve controls
-- Live run timeline via SSE
-- Org chart with active/done/failed agent states
-- Approval inbox with approve/reject/override
-- Artifact browser/download
-- Target_ui status + thumbnails
-- Token budget gauge
-- Recent runs
-- Evolution lab: propose, inspect, approve/reject
-- Production law panel (Roborazzi removed, evidence rules, no self-approval)
+- **Overview** — decree composer, recent runs, live timeline, compact org summary, quick approvals, token budget, quick artifacts, Target_ui mini-preview, evolution quick list.
+- **Live Flow** — full hierarchical agent graph with idle/running/completed/error/waiting icons, live SSE events, and click-through agent detail (status, last event, artifacts, token usage).
+- **Approvals** — pending decisions and history, with Approve / Reject / Dictate.
+- **Artifacts** — run selector, artifact list, JSON/text/image preview, and real screenshot upload for QA evidence.
+- **Target_ui** — folder picker, scan, scan + vision analysis, image grid, confidence, conflicts.
+- **Evolution** — start/stop audit, live Observe → Diagnose → Evaluate → Approve → Apply cards, agent output modals, proposal detail, Approve / Reject / Dictate.
+- **Settings** — project directory browse, Target_ui directory browse, OpenCode model selector (all `opencode models`), editable monthly token budget, autonomy level, runtime info, and mock/demo data purge.
+
+Production defaults:
+
+- No mock/demo controls in the dashboard. The API keeps a test-only mock backend for automated tests; the production UI always uses OpenCode.
+- The selected model is persisted in `.runtime/settings.json` and applied to new runs and evolution audits.
+- The budget is persisted to `org/budget_policy.yaml` and `.runtime/settings.json`.
+- Project and Target_ui directories are persisted and injected into new-run context.
 
 ### 11.2 Production upgrade path
 
@@ -1187,6 +1190,9 @@ python3 -m venv .venv
 
 # Budget
 .venv/bin/uiux budget
+
+# Remove old mock/demo runs from the local DB
+.venv/bin/uiux purge-mock
 
 # Tests
 .venv/bin/pytest -q

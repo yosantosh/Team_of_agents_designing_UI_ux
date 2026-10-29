@@ -359,12 +359,50 @@ class Storage:
             "by_model": dict(sorted(by_model.items(), key=lambda item: item[1], reverse=True)),
         }
 
+    # --------------------------------------------------------------- cleanup
+    def purge_mock_data(self) -> dict[str, Any]:
+        """Remove mock/demo runs and their events, approvals, artifacts, and token rows."""
+        rows = self._query("SELECT run_id, state_json FROM runs")
+        mock_ids: list[str] = []
+        for row in rows:
+            try:
+                state = json.loads(row.get("state_json") or "{}")
+            except json.JSONDecodeError:
+                state = {}
+            if isinstance(state, dict) and state.get("backend") == "mock":
+                mock_ids.append(str(row["run_id"]))
+        counts = {
+            "runs": 0,
+            "events": 0,
+            "artifacts": 0,
+            "approvals": 0,
+            "token_rows": 0,
+        }
+        if mock_ids:
+            placeholders = ",".join("?" for _ in mock_ids)
+            counts["events"] = len(self._query(f"SELECT id FROM events WHERE run_id IN ({placeholders})", tuple(mock_ids)))
+            counts["artifacts"] = len(self._query(f"SELECT artifact_id FROM artifacts WHERE run_id IN ({placeholders})", tuple(mock_ids)))
+            counts["approvals"] = len(self._query(f"SELECT approval_id FROM approvals WHERE run_id IN ({placeholders})", tuple(mock_ids)))
+            counts["token_rows"] = len(self._query(f"SELECT id FROM token_usage WHERE run_id IN ({placeholders})", tuple(mock_ids)))
+            counts["runs"] = len(mock_ids)
+            self._execute(f"DELETE FROM events WHERE run_id IN ({placeholders})", tuple(mock_ids))
+            self._execute(f"DELETE FROM artifacts WHERE run_id IN ({placeholders})", tuple(mock_ids))
+            self._execute(f"DELETE FROM approvals WHERE run_id IN ({placeholders})", tuple(mock_ids))
+            self._execute(f"DELETE FROM token_usage WHERE run_id IN ({placeholders})", tuple(mock_ids))
+            self._execute(f"DELETE FROM runs WHERE run_id IN ({placeholders})", tuple(mock_ids))
+        # Legacy mock provider rows may have survived without a runs row.
+        legacy = self._query("SELECT id FROM token_usage WHERE model LIKE 'mock/%'")
+        if legacy:
+            counts["token_rows"] += len(legacy)
+            self._execute("DELETE FROM token_usage WHERE model LIKE 'mock/%'")
+        return {"purged_run_ids": mock_ids, **counts}
+
     # ------------------------------------------------------------- evolution
     def create_evolution(self, proposal: dict[str, Any], focus: str = "quality") -> dict[str, Any]:
         proposal_id = str(proposal.get("proposal_id") or new_id("evo"))
         now = utcnow()
         self._execute(
-            "INSERT INTO evolution_proposals(proposal_id,title,focus,status,proposal_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO evolution_proposals(proposal_id,title,focus,status,proposal_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
             (proposal_id, str(proposal.get("title", "Evolution proposal")), focus, str(proposal.get("status", "proposed")), json.dumps(proposal, default=str), now, now),
         )
         return self.get_evolution(proposal_id) or {}

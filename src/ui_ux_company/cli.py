@@ -197,7 +197,7 @@ def target_ui(
         manifest = scan_target_ui(
             settings,
             profile,
-            path=Path(path).expanduser() if path else None,
+            path=Path(path).expanduser() if path else settings.target_ui_path,
             analyze=False,
             artifact_store=artifacts,
         )
@@ -256,7 +256,12 @@ def evolve(
     )
     async def _execute():
         try:
-            result = await engine.start(focus=focus, auto_approve=auto_approve, backend=backend)
+            result = await engine.start(
+                focus=focus,
+                auto_approve=auto_approve,
+                backend=backend,
+                model=settings.model_override,
+            )
             console.print(Panel(json.dumps(result.get("proposal", result), indent=2, default=str), title="Evolution proposal"))
             if result.get("evaluation"):
                 console.print(Panel(json.dumps(result["evaluation"], indent=2, default=str), title="Evaluation"))
@@ -272,6 +277,21 @@ def evolve(
 
     try:
         asyncio.run(_execute())
+    finally:
+        storage.close()
+
+
+@app.command("purge-mock")
+def purge_mock():
+    """Remove mock/demo runs, approvals, artifacts, and token rows from the local database."""
+    settings = _settings()
+    storage = Storage(settings.storage_db)
+    try:
+        result = storage.purge_mock_data()
+        for run_id in result.get("purged_run_ids", []):
+            import shutil
+            shutil.rmtree(settings.artifacts_dir / "runs" / run_id, ignore_errors=True)
+        console.print(Panel(json.dumps(result, indent=2), title="Mock data purged"))
     finally:
         storage.close()
 

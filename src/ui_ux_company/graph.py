@@ -35,6 +35,7 @@ class CompanyState(TypedDict, total=False):
     prompt: str
     mode: str
     backend: str
+    model: str | None
     demo: bool
     auto_approve: bool
     autonomy_level: str
@@ -84,6 +85,8 @@ class CompanyGraph:
         self.settings = settings or Settings.from_env()
         self.registry = registry or load_registry(self.settings)
         self.profile = profile or load_profile(self.settings)
+        if self.settings.project_dir:
+            self.profile.data.setdefault("project", {})["repo"] = str(self.settings.project_dir)
         self.budget = budget or load_budget(self.settings)
         self.storage = storage or Storage(self.settings.storage_db)
         self.bus = bus or EventBus(self.storage)
@@ -201,7 +204,13 @@ class CompanyGraph:
         context: dict[str, Any],
         images: list[Path] | None = None,
     ):
-        await self._event(state, "agent.started", f"{role} started", role)
+        await self._event(
+            state,
+            "agent.started",
+            f"{role} started",
+            role,
+            {"model": state.get("model") or self.settings.model_override or "registry default"},
+        )
         started = time.monotonic()
         try:
             result = await self.agents.run(
@@ -212,6 +221,7 @@ class CompanyGraph:
                 run_id=state["run_id"],
                 task_id=role,
                 backend=state.get("backend"),
+                model=state.get("model"),
             )
         except Exception as exc:
             await self._event(
@@ -317,6 +327,7 @@ class CompanyGraph:
                 run_id=state["run_id"],
                 max_images=int(self.profile.target_ui.get("max_images_per_run", 8)),
                 backend=state.get("backend"),
+                model=state.get("model"),
             )
             save_manifest(self.settings, self.profile, manifest)
         data = manifest.model_dump()
@@ -362,7 +373,12 @@ class CompanyGraph:
                 None,
             ),
         ]
-        results = await self.agents.run_many(jobs, run_id=state["run_id"], backend=state.get("backend"))
+        results = await self.agents.run_many(
+            jobs,
+            run_id=state["run_id"],
+            backend=state.get("backend"),
+            model=state.get("model"),
+        )
         research = {
             "ux": results[0].data,
             "android": results[1].data,
@@ -940,6 +956,7 @@ class CompanyGraph:
         target_ui_enabled: bool | None = None,
         demo: bool = False,
         backend: str | None = None,
+        model: str | None = None,
         autonomy_level: str | None = None,
         run_id: str | None = None,
     ) -> dict[str, Any]:
@@ -952,6 +969,7 @@ class CompanyGraph:
             "prompt": prompt,
             "mode": mode,
             "backend": backend or self.settings.model_backend,
+            "model": model or self.settings.model_override,
             "demo": demo,
             "auto_approve": self.settings.auto_approve if auto_approve is None else auto_approve,
             "autonomy_level": autonomy_level or self.settings.autonomy_level,

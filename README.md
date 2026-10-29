@@ -59,7 +59,7 @@ src/ui_ux_company/
   storage.py                       # SQLite runs, events, approvals, token ledger
   artifacts.py                     # versioned artifact store
   static/                          # dependency-free control room
-tests/                             # 10 passing tests
+tests/                             # 11 passing tests
 target_ui_example/                 # generated placeholder reference image
 ui_ux-agent_company.md             # full constitution
 ```
@@ -85,13 +85,14 @@ flowchart LR
 
 | Command | Purpose |
 |---|---|
-| `uiux demo` | Full design pipeline with deterministic mock models. Zero tokens. |
+| `uiux demo` | Developer smoke test with deterministic mock models. Zero tokens. The production dashboard never uses mock data. |
 | `uiux run "<decree>" --mode design` | Run a real design-only decree. |
 | `uiux run "<decree>" --mode full --demo` | Run through implementation/QA with simulated QA (labeled). |
 | `uiux serve` | Start the control room at `http://127.0.0.1:8765`. |
 | `uiux target-ui scan ./target_ui_example --analyze` | Scan and vision-analyze Target_ui images. |
 | `uiux evolve --focus quality` | Ask the independent org auditor for an evolution proposal. |
 | `uiux budget` | Show token spend and remaining budget. |
+| `uiux purge-mock` | Remove old mock/demo runs, approvals, artifacts, and mock token rows from the local DB. |
 | `uiux registry` | Print the registry summary and Mermaid org chart. |
 | `uiux models` | Show model aliases and the OpenCode backend. |
 | `uiux health` | Check local configuration. |
@@ -169,9 +170,19 @@ Upload screenshots to the control room via `POST /api/runs/{run_id}/screenshots`
 
 ---
 
+## Dashboard controls
+
+- **Project directory:** Settings → Project directory → Browse. The selected path is injected into new-run context.
+- **Target_ui directory:** Settings or Target_ui tab → Browse. Scan or Scan + analyze.
+- **Model:** Header model selector or Settings → OpenCode model. It lists every model returned by `opencode models`; the selected model is saved as the default for new runs, and each run can override it.
+- **Budget:** Click the header budget pill or Settings → Monthly token budget → Edit. Changes persist to `org/budget_policy.yaml` and `.runtime/settings.json`.
+- **Live Flow:** Full hierarchical agent graph. Icons show idle / running / completed / error / waiting. Click any agent for status, last event, artifacts, and token usage.
+- **Evolution:** Start audit, watch Observe → Diagnose → Evaluate → Approve → Apply cards, stop the audit, and Approve / Reject / Dictate.
+- **Approvals:** Every pending decision is in the Dictator inbox with Approve / Reject / Dictate.
+
 ## Token budget
 
-`org/budget_policy.yaml` defaults to **100,000,000 tokens/month** as a placeholder. Replace it with your actual ceiling:
+`org/budget_policy.yaml` defaults to **100,000,000 tokens/month** as a placeholder. Replace it with your actual ceiling in the dashboard or:
 
 ```bash
 UIUX_MONTHLY_TOKEN_BUDGET=250000000
