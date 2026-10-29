@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+.DS_Store
+artifacts/runs/
+artifacts/target_ui/*.json
+runs/*.sqlite*
+uiux.sqlite3*
+checkpoints.sqlite3*
+.runtime/
+node_modules/
+dist/
+build/
+*.egg-info/

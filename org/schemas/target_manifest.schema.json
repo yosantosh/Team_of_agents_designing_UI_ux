@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Target UI Manifest",
+  "type": "object",
+  "required": ["version", "generated_at", "precedence", "images"],
+  "properties": {
+    "version": { "type": "string" },
+    "generated_at": { "type": "string" },
+    "source_path": { "type": "string" },
+    "precedence": { "type": "string", "enum": ["tiered", "pixel_perfect", "inspiration"] },
+    "confidence_threshold": { "type": "number", "minimum": 0, "maximum": 1 },
+    "images": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["image_id", "file", "sha256", "status"],
+        "properties": {
+          "image_id": { "type": "string" },
+          "file": { "type": "string" },
+          "sha256": { "type": "string" },
+          "width": { "type": "integer" },
+          "height": { "type": "integer" },
+          "screen": { "type": "string" },
+          "state": { "type": "string" },
+          "theme": { "type": "string" },
+          "status": { "type": "string", "enum": ["unanalyzed", "analyzed", "low_confidence", "conflict", "approved"] },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "extracted": { "type": "object" },
+          "conflicts": { "type": "array", "items": { "type": "string" } },
+          "rights": { "type": "string" }
+        }
+      }
+    }
+  }
+}

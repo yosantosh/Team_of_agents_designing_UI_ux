@@ -1,0 +1,44 @@
+# Token budget policy — the Dictator's monthly model budget.
+
+monthly_total_tokens: 100000000          # PLACEHOLDER: replace with the real ceiling
+currency: "USD"
+counting:
+  count_input: true
+  count_output: true
+  count_cached_input: false              # tracked separately
+  count_reasoning_tokens: true
+  images_as_tokens: 1200                 # conservative estimate per attached image
+  estimation_method: "char_div_4_plus_images"  # exact provider usage when available
+
+reserve:
+  incidents_pct: 15
+  evolution_pct: 5
+  eval_pct: 10
+  available_for_product_pct: 70
+
+caps:
+  per_run_tokens: 2000000
+  per_task_tokens: 500000
+  per_agent_tokens: 250000
+  per_evolution_tokens: 1000000
+  max_rework_tokens: 600000
+
+thresholds:
+  warn_pct: [50, 80, 95]
+  at_80_pct: "route_noncritical_to_cheap_alias"
+  at_95_pct: "require_dictator_approval_for_new_runs"
+  at_100_pct: "hard_stop_noncritical"
+
+on_exceed: "hard_stop_noncritical"
+allow_hotfix_overage: true
+hotfix_requires_approval: true
+
+ledger:
+  table: "token_usage"
+  fields: [run_id, task_id, agent_id, model, input_tokens, output_tokens, cached_tokens, reasoning_tokens, cost_usd, created_at]
+  dashboard_widgets: [burn_rate, forecast, top_consumers, cost_per_screen, budget_remaining]
+
+unit_economics:
+  target_cost_per_screen_usd: 0.50
+  target_tokens_per_screen: 2000000
+  target_cost_per_release_usd: 5.00

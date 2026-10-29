@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Evolution Proposal",
+  "type": "object",
+  "required": ["proposal_id", "title", "problem", "evidence", "changes", "expected_impact", "risks", "eval_plan", "rollback_plan", "status"],
+  "properties": {
+    "proposal_id": { "type": "string" },
+    "title": { "type": "string" },
+    "problem": { "type": "string" },
+    "evidence": { "type": "array", "items": { "type": "string" } },
+    "changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "target", "from", "to", "rationale"],
+        "properties": {
+          "type": { "type": "string", "enum": ["add_agent", "remove_agent", "enable_agent", "disable_agent", "model_swap", "prompt_update", "routing_change", "gate_threshold", "budget_cap", "pod_composition"] },
+          "target": { "type": "string" },
+          "from": {},
+          "to": {},
+          "rationale": { "type": "string" }
+        }
+      }
+    },
+    "expected_impact": {
+      "type": "object",
+      "properties": {
+        "quality": { "type": "string" },
+        "speed": { "type": "string" },
+        "cost": { "type": "string" },
+        "risk": { "type": "string" }
+      }
+    },
+    "risks": { "type": "array", "items": { "type": "string" } },
+    "eval_plan": { "type": "array", "items": { "type": "string" } },
+    "rollback_plan": { "type": "string" },
+    "status": { "type": "string", "enum": ["proposed", "evaluating", "pending_approval", "approved", "rejected", "applied", "rolled_back"] }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agent": {
+    "uiux-worker": {
+      "description": "Headless text/vision worker for the UI/UX Agent Company. No tools, no file edits, no shell. Returns only the requested JSON/text.",
+      "mode": "primary",
+      "model": "modal/deepseek-v4.1-flash-1017",
+      "temperature": 0.2,
+      "prompt": "{file:./.opencode/prompts/model-worker.md}",
+      "permission": {
+        "edit": "deny",
+        "bash": "deny",
+        "read": "deny",
+        "glob": "deny",
+        "grep": "deny",
+        "list": "deny",
+        "webfetch": "deny",
+        "websearch": "deny",
+        "task": "deny",
+        "todowrite": "deny",
+        "skill": "deny",
+        "question": "deny",
+        "lsp": "deny",
+        "external_directory": "deny"
+      }
+    }
+  }
+}

@@ -1,0 +1,30 @@
+from __future__ import annotations
+
+from ui_ux_company.config import PROJECT_ROOT, Settings
+from ui_ux_company.registry import load_budget, load_profile, load_registry
+
+
+def test_registry_loads_and_validates(settings):
+    registry = load_registry(settings)
+    assert registry.version == "1.0.0"
+    assert len(registry.agents) >= 20
+    assert "chief_orchestrator" in registry.enabled_agent_ids()
+    assert "independent_design_critic" in registry.enabled_agent_ids()
+    assert registry.model_alias("reasoner")["model"].startswith("modal/")
+
+
+def test_profile_and_budget(settings):
+    profile = load_profile(settings)
+    budget = load_budget(settings)
+    assert profile.project["package"] == "com.example.dhunchat"
+    assert profile.visual_qa["roborazzi"] is False
+    assert profile.target_ui["precedence"] == "tiered"
+    assert budget.monthly_total_tokens >= 1_000_000
+
+
+def test_mermaid_contains_enabled_agents(settings):
+    registry = load_registry(settings)
+    mermaid = registry.to_mermaid()
+    assert "chief_orchestrator" in mermaid
+    assert "independent_design_critic" in mermaid
+    assert "flowchart TB" in mermaid

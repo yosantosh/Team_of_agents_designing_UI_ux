@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Task Contract",
+  "type": "object",
+  "required": ["task_id", "issued_by", "assigned_role", "goal", "inputs", "acceptance_criteria", "output_artifacts", "status"],
+  "properties": {
+    "task_id": { "type": "string" },
+    "run_id": { "type": "string" },
+    "issued_by": { "type": "string" },
+    "assigned_role": { "type": "string" },
+    "model_binding": { "type": "string" },
+    "worker_runtime": { "type": "string" },
+    "goal": { "type": "string" },
+    "inputs": { "type": "array", "items": { "type": "string" } },
+    "acceptance_criteria": { "type": "array", "items": { "type": "string" } },
+    "output_artifacts": { "type": "array", "items": { "type": "string" } },
+    "risk": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+    "budget_tokens": { "type": "integer" },
+    "rework_count": { "type": "integer", "minimum": 0 },
+    "max_retries": { "type": "integer", "minimum": 0 },
+    "status": { "type": "string", "enum": ["pending", "in_progress", "pending_review", "passed", "needs_rework", "escalated", "cancelled"] },
+    "evidence": { "type": "array", "items": { "type": "string" } },
+    "created_at": { "type": "string" }
+  }
+}
