@@ -175,6 +175,7 @@ async function init() {
   state.flowFull = location.pathname === "/flow" || params.get("view") === "flow";
   if (state.flowFull) {
     document.body.classList.add("flow-full");
+    document.title = "Live Flow — UI/UX Agent Company";
     state.flowAutoFit = true;
     $("flow-fullscreen")?.classList.add("hidden");
     $("flow-native-fullscreen")?.classList.remove("hidden");
@@ -904,7 +905,8 @@ function fitFlow() {
 function setFlowSideWidth(width, persist = true) {
   const layout = $("flow-layout");
   if (!layout) return;
-  const max = Math.max(280, Math.min(680, layout.clientWidth - 380));
+  const available = layout.clientWidth || Math.max(window.innerWidth - 64, 640);
+  const max = Math.max(280, Math.min(680, available - 380));
   const clamped = Math.max(260, Math.min(max, Number(width) || 360));
   layout.style.setProperty("--flow-side-width", `${clamped}px`);
   state.flowSideWidth = clamped;
