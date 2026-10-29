@@ -17,12 +17,17 @@ def test_purge_mock_data_keeps_real_runs(settings):
             "run_real",
             "human_design_approval",
             "Approve",
+            "Full technical message",
             from_agent="independent_design_critic",
             from_codename="A22",
             sla_minutes=60,
+            summary="Short and easy summary",
+            details="Full technical details",
         )
         assert approval["from_agent"] == "independent_design_critic"
         assert approval["due_at"]
+        assert approval["summary"] == "Short and easy summary"
+        assert approval["details"] == "Full technical details"
 
         stale = storage.create_approval("run_real", "dictator_escalation", "Stale")
         run = storage.get_run("run_real")

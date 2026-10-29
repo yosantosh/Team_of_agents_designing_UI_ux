@@ -222,6 +222,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return JSONResponse({"service": "uiux-agent-company", "dashboard": "not installed"})
         return FileResponse(index_path)
 
+    @app.get("/flow")
+    async def flow_view():
+        index_path = static_dir / "index.html"
+        if not index_path.exists():
+            return JSONResponse({"service": "uiux-agent-company", "dashboard": "not installed"})
+        return FileResponse(index_path)
+
     @app.get("/api/health")
     async def health():
         return {
@@ -305,6 +312,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             approval["from_agent"] = gate_sources.get(str(approval.get("gate")), "chief_orchestrator")
         if not approval.get("from_codename"):
             approval["from_codename"] = registry.codename(str(approval["from_agent"]))
+        if not approval.get("summary"):
+            message = " ".join(str(approval.get("message") or "").split())
+            approval["summary"] = message[:240].rsplit(" ", 1)[0] + "…" if len(message) > 240 else message
+        if not approval.get("details"):
+            approval["details"] = approval.get("message") or ""
         return approval
 
     def _project_validation(force: bool = False) -> dict[str, Any]:
@@ -789,7 +801,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "state": state,
             "artifacts": storage.list_artifacts(run_id),
             "events": storage.list_events(run_id, limit=200),
-            "messages": storage.list_agent_messages(run_id, limit=300),
+            "messages": storage.list_agent_messages(run_id, limit=1000),
             "approvals": [
                 _enrich_approval(a)
                 for a in storage.list_approvals(None, 200)

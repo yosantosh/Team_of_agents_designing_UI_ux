@@ -30,6 +30,12 @@ const state = {
   approvalSubtab: "pending",
   agentStatus: {},
   flowRunId: null,
+  flowDetailAgent: null,
+  agentWindowId: null,
+  flowShowAllConnections: false,
+  flowAutoFit: false,
+  flowFull: false,
+  flowSideWidth: 360,
   artifactRunId: null,
   evolutionId: null,
   evolution: null,
@@ -119,6 +125,14 @@ function agentLabel(agentId) {
 
 function currentWork(agentId) {
   if (!state.run) return "";
+  const messages = (state.messages || []).filter(
+    (message) => message.from_agent === agentId || message.to_agent === agentId
+  );
+  const lastMessage = messages[messages.length - 1];
+  if (lastMessage) {
+    const sentence = lastMessage.doing || lastMessage.did || lastMessage.kind || "";
+    if (sentence) return sentence;
+  }
   const events = (state.events || []).filter((event) => event.agent_id === agentId && event.type === "agent.started");
   const last = events[events.length - 1];
   return last?.data?.work_label || agentById(agentId)?.work_label || "";
@@ -131,7 +145,12 @@ function switchTab(name) {
   document.querySelectorAll(".tab-panel").forEach((panel) => panel.classList.toggle("active", panel.id === `tab-${name}`));
   if (name === "flow") {
     renderFlow();
-    setTimeout(drawFlowEdges, 40);
+    setTimeout(() => {
+      drawFlowEdges();
+      if (state.flowAutoFit) fitFlow();
+    }, 40);
+  } else if (state.agentWindowId) {
+    closeAgentWindow();
   }
   if (name === "artifacts") renderArtifactsTab();
   if (name === "history") renderHistory();
@@ -152,6 +171,18 @@ function switchTab(name) {
 
 // ------------------------------------------------------------------ init
 async function init() {
+  const params = new URLSearchParams(location.search);
+  state.flowFull = location.pathname === "/flow" || params.get("view") === "flow";
+  if (state.flowFull) {
+    document.body.classList.add("flow-full");
+    state.flowAutoFit = true;
+    $("flow-fullscreen")?.classList.add("hidden");
+    $("flow-native-fullscreen")?.classList.remove("hidden");
+    $("flow-exit-full")?.classList.remove("hidden");
+  }
+  state.flowShowAllConnections = localStorage.getItem("uiux_flow_all_connections") === "1";
+  updateFlowConnectionsToggle();
+  initFlowResizer();
   try {
     try {
       state.authUser = await api("/api/auth/me");
@@ -189,11 +220,15 @@ async function init() {
     state.history = history.history || [];
     await loadModels(false);
     renderAll();
-    const initialTab = location.hash.replace("#", "");
+    const initialTab = state.flowFull ? "flow" : location.hash.replace("#", "");
     if (initialTab) switchTab(initialTab);
+    const requestedRun = params.get("run");
     const activeRun = (state.runs || []).find((run) => ACTIVE_RUN_STATUSES.has(run.status));
     const activeEvolution = (state.evolutions || []).find((proposal) => ACTIVE_EVOLUTION_STATUSES.has(proposal.status));
-    if (activeRun) {
+    if (requestedRun && (state.runs || []).some((run) => run.run_id === requestedRun)) {
+      state.contextMode = "history";
+      await loadRun(requestedRun, true);
+    } else if (activeRun) {
       state.contextMode = "live";
       await loadRun(activeRun.run_id, true);
     } else {
@@ -206,6 +241,7 @@ async function init() {
     } else {
       clearEvolutionContext({ render: true });
     }
+    if (state.flowFull) setTimeout(fitFlow, 180);
     setInterval(poll, 4000);
   } catch (error) {
     $("footer-status").textContent = `init error: ${error.message}`;
@@ -529,6 +565,7 @@ async function loadRun(runId, connect = true) {
     renderOrgSummary();
     fillRunSelect($("flow-run-select"), runId);
     fillRunSelect($("artifact-run-select"), runId);
+    if (state.flowFull && state.flowAutoFit) setTimeout(fitFlow, 100);
     if (connect) connectRunEvents(runId, state.events.length ? state.events[state.events.length - 1].id : 0);
   } catch (error) {
     toast(`Run load error: ${error.message}`, "error");
@@ -546,6 +583,10 @@ function clearRunContext({ render = true } = {}) {
   state.artifacts = [];
   state.agentStatus = {};
   state.flowRunId = null;
+  state.flowDetailAgent = null;
+  state.agentWindowId = null;
+  const agentWindow = $("agent-live-window");
+  if (agentWindow) agentWindow.classList.add("hidden");
   state.artifactRunId = null;
   state.contractRunId = null;
   state.contract = null;
@@ -734,28 +775,29 @@ function renderFlow() {
   const nodeHtml = (agent, extraClass = "") => {
     const status = statusFor(agent.id);
     const work = currentWork(agent.id);
+    const selected = state.flowDetailAgent === agent.id ? "selected" : "";
     return `
-      <div class="flow-node ${extraClass} ${agent.enabled ? "" : "agent-off"} status-${status}" data-node-id="${escapeHtml(agent.id)}" title="${escapeHtml(agent.mission || "")}">
+      <div class="flow-node ${extraClass} ${selected} ${agent.enabled ? "" : "agent-off"} status-${status}" data-node-id="${escapeHtml(agent.id)}" data-agent-status="${status}" title="${escapeHtml(agent.mission || "")}">
         <span class="node-icon">${FLOW_ICONS[status] || "○"}</span>
         <div class="node-title">${escapeHtml(agent.codename || "")} · ${escapeHtml(agent.title || agent.id)}</div>
         <div class="node-sub">${escapeHtml(agent.model || "")} · ${status}</div>
-        ${work ? `<div class="node-work">${escapeHtml(work)}</div>` : ""}
+        ${work ? `<div class="node-work" title="${escapeHtml(work)}">${escapeHtml(work)}</div>` : ""}
       </div>
     `;
   };
   const top = `
     <div class="flow-top">
-      <div class="flow-node human status-${statusFor("dictator")}" data-node-id="dictator">
+      <div class="flow-node human ${state.flowDetailAgent === "dictator" ? "selected" : ""} status-${statusFor("dictator")}" data-node-id="dictator" data-agent-status="${statusFor("dictator")}">
         <span class="node-icon">${FLOW_ICONS[statusFor("dictator")]}</span>
         <div class="node-title">Dictator</div>
         <div class="node-sub">Human Product Owner</div>
       </div>
-      <div class="flow-node orchestrator status-${statusFor("ceo")}" data-node-id="ceo">
+      <div class="flow-node orchestrator ${state.flowDetailAgent === "ceo" ? "selected" : ""} status-${statusFor("ceo")}" data-node-id="ceo" data-agent-status="${statusFor("ceo")}">
         <span class="node-icon">${FLOW_ICONS[statusFor("ceo")]}</span>
         <div class="node-title">${escapeHtml(agentById("ceo")?.codename || "A1")} · CEO</div>
         <div class="node-sub">Company operating system</div>
       </div>
-      <div class="flow-node orchestrator status-${statusFor("chief_orchestrator")}" data-node-id="chief_orchestrator">
+      <div class="flow-node orchestrator ${state.flowDetailAgent === "chief_orchestrator" ? "selected" : ""} status-${statusFor("chief_orchestrator")}" data-node-id="chief_orchestrator" data-agent-status="${statusFor("chief_orchestrator")}">
         <span class="node-icon">${FLOW_ICONS[statusFor("chief_orchestrator")]}</span>
         <div class="node-title">${escapeHtml(agentById("chief_orchestrator")?.codename || "A2")} · Chief UI/UX Orchestrator</div>
         <div class="node-sub">Tier 0 · routing · budgets</div>
@@ -776,6 +818,7 @@ function renderFlow() {
   $("flow-canvas").style.zoom = String(state.flowZoom);
   renderFlowEvents();
   renderFlowFeed();
+  if (state.agentWindowId) renderAgentWindow();
   if (state.activeTab === "flow") requestAnimationFrame(drawFlowEdges);
 }
 
@@ -823,13 +866,91 @@ function applyFlowZoom() {
   requestAnimationFrame(drawFlowEdges);
 }
 
+function updateFlowConnectionsToggle() {
+  const button = $("flow-all-connections");
+  if (!button) return;
+  button.setAttribute("aria-pressed", String(state.flowShowAllConnections));
+  button.classList.toggle("toggle-on", state.flowShowAllConnections);
+  button.textContent = state.flowShowAllConnections ? "All links ✓" : "All links";
+}
+
+function toggleFlowConnections() {
+  state.flowShowAllConnections = !state.flowShowAllConnections;
+  localStorage.setItem("uiux_flow_all_connections", state.flowShowAllConnections ? "1" : "0");
+  updateFlowConnectionsToggle();
+  drawFlowEdges();
+  if (state.agentWindowId) renderAgentWindow();
+}
+
+function fitFlow() {
+  const canvas = $("flow-canvas");
+  const nodes = $("flow-nodes");
+  if (!canvas || !nodes || !canvas.offsetParent) return;
+  const previous = state.flowZoom;
+  state.flowZoom = 1;
+  canvas.style.zoom = "1";
+  const contentW = Math.max(nodes.offsetWidth, 1);
+  const contentH = Math.max(nodes.offsetHeight, 1);
+  const availableW = Math.max(canvas.clientWidth - 4, 1);
+  const availableH = Math.max(canvas.clientHeight - 4, 1);
+  let scale = Math.min(availableW / contentW, availableH / contentH);
+  if (!state.flowFull) scale = Math.min(1, availableW / contentW);
+  state.flowZoom = Math.max(0.35, Math.min(1.5, Math.round(scale * 100) / 100));
+  state.flowAutoFit = true;
+  applyFlowZoom();
+  if (previous && state.flowZoom !== previous) requestAnimationFrame(drawFlowEdges);
+}
+
+function setFlowSideWidth(width, persist = true) {
+  const layout = $("flow-layout");
+  if (!layout) return;
+  const max = Math.max(280, Math.min(680, layout.clientWidth - 380));
+  const clamped = Math.max(260, Math.min(max, Number(width) || 360));
+  layout.style.setProperty("--flow-side-width", `${clamped}px`);
+  state.flowSideWidth = clamped;
+  if (persist) localStorage.setItem("uiux_flow_side_width", String(clamped));
+  requestAnimationFrame(drawFlowEdges);
+}
+
+function initFlowResizer() {
+  const saved = Number(localStorage.getItem("uiux_flow_side_width") || 0);
+  if (saved) setFlowSideWidth(saved, false);
+  const resizer = $("flow-resizer");
+  const layout = $("flow-layout");
+  if (!resizer || !layout) return;
+  let dragging = false;
+  const stop = () => {
+    dragging = false;
+    resizer.classList.remove("dragging");
+  };
+  resizer.addEventListener("pointerdown", (event) => {
+    dragging = true;
+    resizer.classList.add("dragging");
+    resizer.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  });
+  window.addEventListener("pointermove", (event) => {
+    if (!dragging) return;
+    const rect = layout.getBoundingClientRect();
+    setFlowSideWidth(rect.right - event.clientX);
+  });
+  window.addEventListener("pointerup", stop);
+  window.addEventListener("pointercancel", stop);
+}
+
+function openFullFlow() {
+  const runId = state.flowRunId || state.runId || "";
+  window.open(`/flow?run=${encodeURIComponent(runId)}`, "_blank", "noopener");
+}
+
 function drawFlowEdges() {
   const canvas = $("flow-canvas");
   const svg = $("flow-edges");
   const nodes = $("flow-nodes");
   if (!canvas || !svg || !nodes || !canvas.offsetParent) return;
-  const width = nodes.scrollWidth;
-  const height = nodes.scrollHeight;
+  const zoom = Number(state.flowZoom) || 1;
+  const width = nodes.offsetWidth;
+  const height = nodes.offsetHeight;
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   svg.style.width = `${width}px`;
   svg.style.height = `${height}px`;
@@ -837,10 +958,10 @@ function drawFlowEdges() {
   const box = (el) => {
     const rect = el.getBoundingClientRect();
     return {
-      x: rect.left - base.left + rect.width / 2,
-      y: rect.top - base.top + rect.height / 2,
-      top: rect.top - base.top,
-      bottom: rect.top - base.top + rect.height,
+      x: (rect.left - base.left) / zoom + rect.width / (2 * zoom),
+      y: (rect.top - base.top) / zoom + rect.height / (2 * zoom),
+      top: (rect.top - base.top) / zoom,
+      bottom: (rect.top - base.top + rect.height) / zoom,
     };
   };
   const dict = document.querySelector('[data-node-id="dictator"]');
@@ -851,84 +972,187 @@ function drawFlowEdges() {
   const c = ceo ? box(ceo) : null;
   const o = box(orch);
   let paths = "";
-  const edge = (a, b, color = "rgba(168,85,247,.22)", dashed = false) => {
+  const edge = (a, b, opts = {}) => {
     const dy = Math.max(18, Math.abs(b.y - a.y) / 2);
-    const dash = dashed ? ' stroke-dasharray="4 5"' : "";
-    paths += `<path d="M ${a.x} ${a.y} C ${a.x} ${a.y + dy}, ${b.x} ${b.y - dy}, ${b.x} ${b.y}" stroke="${color}" stroke-width="1.3" fill="none"${dash}/>`;
+    const dash = opts.dashed ? ' stroke-dasharray="4 5"' : "";
+    const glow = opts.glow ? ' filter="url(#flow-glow)"' : "";
+    const opacity = opts.opacity == null ? 1 : opts.opacity;
+    paths += `<path d="M ${a.x} ${a.y} C ${a.x} ${a.y + dy}, ${b.x} ${b.y - dy}, ${b.x} ${b.y}" stroke="${opts.color || "rgba(168,85,247,.22)"}" stroke-width="${opts.width || 1.3}" fill="none"${dash}${glow} opacity="${opacity}"/>`;
   };
+
+  // The command chain is always visible. The Dictator line glows.
   if (c) {
-    edge({ x: d.x, y: d.bottom }, { x: c.x, y: c.top }, "rgba(255,255,255,.28)");
-    edge({ x: c.x, y: c.bottom }, { x: o.x, y: o.top }, "rgba(255,255,255,.20)");
+    edge({ x: d.x, y: d.bottom }, { x: c.x, y: c.top }, {
+      color: "rgba(245,158,11,.92)", width: 2.4, glow: true,
+    });
+    edge({ x: c.x, y: c.bottom }, { x: o.x, y: o.top }, {
+      color: "rgba(255,255,255,.34)", width: 1.5,
+    });
   } else {
-    edge({ x: d.x, y: d.bottom }, { x: o.x, y: o.top }, "rgba(255,255,255,.28)");
+    edge({ x: d.x, y: d.bottom }, { x: o.x, y: o.top }, {
+      color: "rgba(245,158,11,.92)", width: 2.4, glow: true,
+    });
   }
+
+  // A2's reporting lines are always visible and plain, never dotted.
   const tiers = [...document.querySelectorAll(".flow-tier")];
   for (const tier of tiers) {
     const rect = tier.getBoundingClientRect();
-    const centerX = rect.left - base.left + rect.width / 2;
-    const topY = rect.top - base.top;
-    edge({ x: o.x, y: o.bottom + 4 }, { x: centerX, y: topY - 14 });
+    const centerX = (rect.left - base.left) / zoom + rect.width / (2 * zoom);
+    const topY = (rect.top - base.top) / zoom;
+    edge({ x: o.x, y: o.bottom + 4 }, { x: centerX, y: topY - 14 }, {
+      color: "rgba(168,85,247,.22)", width: 1.1,
+    });
   }
-  for (let i = 0; i < tiers.length - 1; i += 1) {
-    const a = tiers[i].getBoundingClientRect();
-    const b = tiers[i + 1].getBoundingClientRect();
-    const ax = a.left - base.left + a.width / 2;
-    const bx = b.left - base.left + b.width / 2;
-    edge({ x: ax, y: a.bottom - base.top }, { x: bx, y: b.top - base.top }, "rgba(168,85,247,.14)");
-  }
+
   const signalColors = {
-    handoff: "rgba(168,85,247,.58)",
-    review: "rgba(56,189,248,.55)",
-    artifact: "rgba(34,197,94,.55)",
-    feedback: "rgba(255,59,48,.55)",
-    escalation: "rgba(245,158,11,.65)",
-    broadcast: "rgba(255,255,255,.22)",
-    instruction: "rgba(245,158,11,.45)",
+    handoff: "rgba(168,85,247,.62)",
+    review: "rgba(56,189,248,.62)",
+    artifact: "rgba(34,197,94,.62)",
+    feedback: "rgba(255,59,48,.62)",
+    escalation: "rgba(245,158,11,.72)",
+    broadcast: "rgba(255,255,255,.28)",
+    instruction: "rgba(245,158,11,.55)",
   };
   const nodeFor = (agentId) => document.querySelector(`[data-node-id="${CSS.escape(agentId || "")}"]`);
-  for (const message of (state.messages || []).slice(-32)) {
+  const activeIds = new Set(
+    Object.entries(state.agentStatus || {})
+      .filter(([, status]) => status === "running")
+      .map(([agentId]) => agentId)
+  );
+  const alwaysIds = new Set(["dictator", "ceo", "chief_orchestrator"]);
+  const selected = state.flowDetailAgent;
+  const allMode = Boolean(state.flowShowAllConnections);
+  const pairMessages = new Map();
+  for (const message of (state.messages || [])) {
+    if (!message.from_agent || !message.to_agent || message.from_agent === message.to_agent) continue;
+    pairMessages.set(`${message.from_agent}->${message.to_agent}`, message);
+  }
+  const messagesToDraw = allMode ? (state.messages || []) : [...pairMessages.values()];
+  const pairFan = new Map();
+  for (const message of messagesToDraw) {
     const from = nodeFor(message.from_agent);
     const to = nodeFor(message.to_agent);
     if (!from || !to || from === to) continue;
+    const fromId = message.from_agent;
+    const toId = message.to_agent;
+    const touchesSelected = Boolean(selected && (fromId === selected || toId === selected));
+    const touchesAlways = alwaysIds.has(fromId) || alwaysIds.has(toId);
+    const touchesActive = activeIds.has(fromId) || activeIds.has(toId);
+    if (!allMode && !touchesSelected && !touchesAlways && !touchesActive) continue;
+    if (!allMode && selected && !touchesSelected && !touchesAlways && !touchesActive) continue;
+    const isDictator = fromId === "dictator" || toId === "dictator";
+    const isExec = fromId === "ceo" || toId === "ceo" || fromId === "chief_orchestrator" || toId === "chief_orchestrator";
     const a = box(from);
     const b = box(to);
-    const color = signalColors[message.kind] || signalColors.broadcast;
+    const pairKey = `${fromId}->${toId}`;
+    const fanIndex = pairFan.get(pairKey) || 0;
+    pairFan.set(pairKey, fanIndex + 1);
+    const fanOffset = allMode ? ((fanIndex % 7) - 3) * 5 : 0;
+    const bend = (a.x < b.x ? 1 : -1) * 24 + fanOffset;
     const dy = Math.max(24, Math.abs(b.y - a.y) / 2);
-    const bend = (a.x < b.x ? 1 : -1) * 24;
-    paths += `<path d="M ${a.x} ${a.y} C ${a.x + bend} ${a.y + dy}, ${b.x + bend} ${b.y - dy}, ${b.x} ${b.y}" stroke="${color}" stroke-width="1" fill="none" stroke-dasharray="2 4" opacity=".9"/>`;
+    const color = isDictator
+      ? "rgba(245,158,11,.85)"
+      : touchesSelected
+        ? "rgba(168,85,247,.92)"
+        : isExec
+          ? "rgba(255,255,255,.36)"
+          : (signalColors[message.kind] || signalColors.broadcast);
+    const width = isDictator ? 2 : touchesSelected ? 1.8 : isExec ? 1.4 : 1;
+    const dashed = !isDictator && !isExec && !touchesSelected;
+    const opacity = allMode
+      ? (touchesSelected || isDictator || isExec ? 0.9 : 0.42)
+      : (touchesSelected || isDictator || isExec ? 1 : 0.75);
+    const glow = isDictator ? ' filter="url(#flow-glow)"' : "";
+    const dash = dashed ? ' stroke-dasharray="2 4"' : "";
+    paths += `<path d="M ${a.x} ${a.y} C ${a.x + bend} ${a.y + dy}, ${b.x + bend} ${b.y - dy}, ${b.x} ${b.y}" stroke="${color}" stroke-width="${width}" fill="none"${dash}${glow} opacity="${opacity}"/>`;
   }
-  svg.innerHTML = `<defs><marker id="flow-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="rgba(168,85,247,.38)"/></marker></defs>${paths}`;
+  svg.innerHTML = `
+    <defs>
+      <filter id="flow-glow" x="-60%" y="-60%" width="220%" height="220%">
+        <feGaussianBlur stdDeviation="2.4" result="blur"/>
+        <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>
+    ${paths}`;
 }
 
 function openAgentDetail(agentId) {
-  if (agentId === "dictator") {
-    openModal("Dictator", "Human Product Owner / Manager", `<p class="muted">Final authority on direction, taste, risk, budget, overrides, and releases.</p>`);
-    return;
-  }
-  const agent = (state.registry?.registry?.agents || []).find((a) => a.id === agentId);
-  if (!agent) return;
-  const status = state.agentStatus[agentId] || (agent.enabled ? "idle" : "disabled");
-  const events = (state.events || []).filter((e) => e.agent_id === agentId);
-  const artifacts = (state.artifacts || []).filter((a) => a.created_by === agentId);
+  state.flowDetailAgent = agentId;
+  state.agentWindowId = agentId;
+  renderFlow();
+  renderAgentWindow();
+}
+
+function closeAgentWindow() {
+  state.agentWindowId = null;
+  state.flowDetailAgent = null;
+  const el = $("agent-live-window");
+  if (el) el.classList.add("hidden");
+  renderFlow();
+}
+
+function renderAgentWindow() {
+  const el = $("agent-live-window");
+  if (!el) return;
+  const agentId = state.agentWindowId;
+  if (!agentId) { el.classList.add("hidden"); return; }
+  const agent = agentId === "dictator" ? null : agentById(agentId);
+  if (agentId !== "dictator" && !agent) { closeAgentWindow(); return; }
+  const status = agentId === "dictator"
+    ? (state.agentStatus.dictator || "idle")
+    : (state.agentStatus[agentId] || (agent.enabled ? "idle" : "disabled"));
+  const messages = (state.messages || []).filter(
+    (message) => message.from_agent === agentId || message.to_agent === agentId
+  );
+  const events = (state.events || []).filter((event) => event.agent_id === agentId);
+  const artifacts = (state.artifacts || []).filter((artifact) => artifact.created_by === agentId);
   const usage = state.budget?.by_agent?.[agentId] || 0;
-  const last = events[events.length - 1];
-  const body = `
-    <div class="kv" style="margin-bottom:10px">
+  const current = agentId === "dictator"
+    ? (state.approvals?.length ? `${state.approvals.length} decision(s) waiting for you.` : "No decisions waiting right now.")
+    : (currentWork(agentId) || agent?.mission || "No activity yet.");
+  const connections = (state.flowShowAllConnections ? messages : messages.slice(-10)).reverse().map((message) => {
+    const outgoing = message.from_agent === agentId;
+    const other = outgoing ? message.to_agent : message.from_agent;
+    const text = outgoing
+      ? (message.did || message.doing || message.kind)
+      : `${message.did || message.kind}${message.needs ? ` · Needs: ${message.needs}` : ""}`;
+    return `<div class="agent-connection"><span class="to">${outgoing ? "→" : "←"} ${escapeHtml(agentLabel(other))}</span> · ${escapeHtml(text)}</div>`;
+  }).join("");
+  const liveEvents = events.slice(-8).reverse().map((event) => `
+    <div class="event"><span class="dot"></span><div class="body">
+      <div class="msg">${escapeHtml(event.message || event.type)}</div>
+      <div class="meta">${escapeHtml(event.type)} · ${fmtTime(event.created_at)}</div>
+    </div></div>`).join("");
+  const artifactHtml = artifacts.slice(-8).reverse().map((artifact) => `
+    <div class="item clickable" data-agent-artifact="${escapeHtml(artifact.name)}">
+      <div class="title">${escapeHtml(artifact.name)}</div>
+      <div class="meta">${fmtTime(artifact.created_at)}</div>
+    </div>`).join("");
+  $("agent-live-title").textContent = agentId === "dictator"
+    ? "Dictator · Human Product Owner"
+    : `${agent.codename || ""} · ${agent.title || agent.id}`;
+  $("agent-live-sub").textContent = `${status} · ${agentId === "dictator" ? "final authority" : (agent.model || "agent")}`;
+  $("agent-live-body").innerHTML = `
+    <div class="kv" style="margin-bottom:8px">
       <span>Status</span><b class="badge ${statusClass(status)}">${escapeHtml(status)}</b>
-      <span>Model alias</span><b>${escapeHtml(agent.model || "—")}</b>
-      <span>Tier</span><b>${escapeHtml(agent.tier)}</b>
+      <span>Tier</span><b>${escapeHtml(agent?.tier ?? "—")}</b>
       <span>Tokens</span><b>${fmtNumber(usage)}</b>
+      <span>Connections</span><b>${messages.length}</b>
     </div>
-    <p class="muted">${escapeHtml(agent.mission || "")}</p>
-    ${last ? `<h3 style="font-size:12px;margin-top:12px">Last event</h3><pre>${escapeHtml(JSON.stringify({ type: last.type, message: last.message, data: last.data }, null, 2))}</pre>` : ""}
-    <h3 style="font-size:12px;margin-top:12px">Artifacts (${artifacts.length})</h3>
-    <div class="list">${artifacts.length ? artifacts.map((a) => `<div class="item clickable" data-agent-artifact="${escapeHtml(a.name)}"><div class="title">${escapeHtml(a.name)}</div><div class="meta">${fmtTime(a.created_at)}</div></div>`).join("") : `<div class="muted">No artifacts produced by this agent yet.</div>`}</div>
-    <h3 style="font-size:12px;margin-top:12px">Recent agent events (${events.length})</h3>
-    <div class="timeline tall">${events.slice(-20).map((e) => `<div class="event"><span class="dot"></span><div class="body"><div class="msg">${escapeHtml(e.message || e.type)}</div><div class="meta">${escapeHtml(e.type)} · ${fmtTime(e.created_at)}</div></div></div>`).join("") || `<div class="muted">No events yet.</div>`}</div>
+    <div class="agent-now">${escapeHtml(current)}</div>
+    <h3>Live activity</h3>
+    <div class="timeline">${liveEvents || `<div class="muted">No events yet.</div>`}</div>
+    <h3>Connections</h3>
+    <div class="agent-connections">${connections || `<div class="muted">No connections yet.</div>`}</div>
+    <h3>Outputs (${artifacts.length})</h3>
+    <div class="list">${artifactHtml || `<div class="muted">No artifacts produced yet.</div>`}</div>
   `;
-  openModal(`${agent.codename || ""} · ${agent.title || agent.id}`, agent.real_world_equivalent || "Agent detail", body, `<button class="btn ghost" data-close-modal>Close</button>`, (modal) => {
-    modal.querySelectorAll("[data-agent-artifact]").forEach((el) => {
-      el.addEventListener("click", () => { closeModal(); openArtifact(state.runId, el.dataset.agentArtifact); });
+  el.classList.remove("hidden");
+  el.querySelectorAll("[data-agent-artifact]").forEach((node) => {
+    node.addEventListener("click", () => {
+      closeAgentWindow();
+      openArtifact(state.runId, node.dataset.agentArtifact);
     });
   });
 }
@@ -950,7 +1174,11 @@ function approvalCard(approval, compact = false) {
         ${approval.due_at ? `<span>Due: ${fmtTime(approval.due_at)}</span>` : ""}
         ${overdue ? `<span class="badge failed">overdue</span>` : ""}
       </div>
-      <div class="message">${escapeHtml(short(approval.message || "", compact ? 180 : 500))}</div>
+      <div class="approval-summary">${escapeHtml(approval.summary || short(approval.message || approval.title || "", compact ? 180 : 260))}</div>
+      <details class="approval-details">
+        <summary>Show details</summary>
+        <div class="details-body">${escapeHtml(approval.details || approval.message || "No extra details recorded.")}</div>
+      </details>
       ${options && !compact ? `<div class="meta" style="margin-top:7px">${options}</div>` : ""}
       <div class="approval-actions">
         ${approval.gate === "evolution_approval" && approval.run_id ? `<button class="btn small ghost" data-evolution-view="${escapeHtml(approval.run_id)}">View proposal</button>` : ""}
@@ -972,7 +1200,7 @@ function renderApprovals() {
   if (state.lastPendingIds && "Notification" in window && Notification.permission === "granted") {
     for (const approval of pending) {
       if (!state.lastPendingIds.has(approval.approval_id)) {
-        new Notification("Dictator inbox", { body: `${approval.title}\nFrom ${approval.from_codename || approval.from_agent || "system"}` });
+        new Notification("Dictator inbox", { body: `${approval.summary || approval.title}\nFrom ${approval.from_codename || approval.from_agent || "system"}` });
       }
     }
   }
@@ -1004,6 +1232,11 @@ function renderApprovals() {
         <span>${fmtTime(a.decided_at || a.created_at)}</span>
         ${a.decision?.notes ? `<span>${escapeHtml(short(a.decision.notes, 80))}</span>` : ""}
       </div>
+      <div class="approval-summary">${escapeHtml(a.summary || short(a.message || a.title || "", 240))}</div>
+      <details class="approval-details">
+        <summary>Show details</summary>
+        <div class="details-body">${escapeHtml(a.details || a.message || "No extra details recorded.")}</div>
+      </details>
     </div>
   `).join("") : `<div class="muted">No decisions recorded yet.</div>`;
   document.querySelectorAll("[data-approval]").forEach((button) => {
@@ -1996,15 +2229,24 @@ $("approval-subtabs").addEventListener("click", (event) => {
   const button = event.target.closest("[data-approval-subtab]");
   if (button) switchApprovalSubtab(button.dataset.approvalSubtab);
 });
-$("open-flow").addEventListener("click", () => switchTab("flow"));
+$("open-flow").addEventListener("click", () => openFullFlow());
 $("stop-run").addEventListener("click", () => stopRun(state.runId));
 $("flow-stop-run").addEventListener("click", () => stopRun(state.flowRunId || state.runId));
 $("open-evolution").addEventListener("click", () => switchTab("evolution"));
 $("flow-run-select").addEventListener("change", (event) => { loadRun(event.target.value, true); });
 $("flow-refresh").addEventListener("click", () => { if (state.flowRunId) loadRun(state.flowRunId, true); });
-$("flow-zoom-in").addEventListener("click", () => { state.flowZoom = Math.min(1.8, state.flowZoom + 0.1); applyFlowZoom(); });
-$("flow-zoom-out").addEventListener("click", () => { state.flowZoom = Math.max(0.5, state.flowZoom - 0.1); applyFlowZoom(); });
-$("flow-zoom-reset").addEventListener("click", () => { state.flowZoom = 1; applyFlowZoom(); });
+$("flow-all-connections").addEventListener("click", toggleFlowConnections);
+$("flow-fit").addEventListener("click", () => { state.flowAutoFit = true; fitFlow(); });
+$("flow-fullscreen").addEventListener("click", openFullFlow);
+$("flow-native-fullscreen").addEventListener("click", () => {
+  const request = document.documentElement.requestFullscreen?.();
+  if (request?.catch) request.catch(() => toast("Fullscreen was blocked by the browser.", "error"));
+});
+$("flow-exit-full").addEventListener("click", () => { window.location.href = "/"; });
+$("flow-zoom-in").addEventListener("click", () => { state.flowAutoFit = false; state.flowZoom = Math.min(1.8, state.flowZoom + 0.1); applyFlowZoom(); });
+$("flow-zoom-out").addEventListener("click", () => { state.flowAutoFit = false; state.flowZoom = Math.max(0.35, state.flowZoom - 0.1); applyFlowZoom(); });
+$("flow-zoom-reset").addEventListener("click", () => { state.flowAutoFit = false; state.flowZoom = 1; applyFlowZoom(); });
+$("agent-live-close").addEventListener("click", closeAgentWindow);
 $("artifact-run-select").addEventListener("change", (event) => { loadArtifactsForRun(event.target.value); });
 $("contract-run-select").addEventListener("change", (event) => { if (event.target.value) loadContract(event.target.value, true); });
 $("contract-refresh").addEventListener("click", () => { if (state.contractRunId) loadContract(state.contractRunId, true); });
@@ -2145,7 +2387,17 @@ $("evolve-btn").addEventListener("click", () => {
 $("evolution-start").addEventListener("click", startEvolution);
 $("evolution-stop").addEventListener("click", stopEvolution);
 $("evolution-select").addEventListener("change", (event) => { if (event.target.value) openEvolution(event.target.value); });
-window.addEventListener("resize", () => { if (state.activeTab === "flow") drawFlowEdges(); });
+window.addEventListener("resize", () => {
+  const saved = Number(localStorage.getItem("uiux_flow_side_width") || 0);
+  if (saved) setFlowSideWidth(saved, false);
+  if (state.activeTab === "flow") {
+    if (state.flowAutoFit) fitFlow();
+    else drawFlowEdges();
+  }
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && state.agentWindowId) closeAgentWindow();
+});
 document.addEventListener("scroll", (event) => {
   const el = event.target;
   if (!(el instanceof HTMLElement)) return;

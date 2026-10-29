@@ -153,13 +153,18 @@
         <div class="row">
           <select id="flow-run-select" class="wide-select"></select>
           <button class="btn ghost small" id="flow-refresh">Refresh</button>
+          <button class="btn ghost small" id="flow-all-connections" aria-pressed="false" title="Show every agent-to-agent connection from the start of this run">All links</button>
+          <button class="btn ghost small" id="flow-fit" title="Fit the flow to the panel">Fit</button>
           <button class="btn ghost small" id="flow-zoom-out">−</button>
           <button class="btn ghost small" id="flow-zoom-reset">100%</button>
           <button class="btn ghost small" id="flow-zoom-in">+</button>
+          <button class="btn ghost small" id="flow-fullscreen" title="Open the flow in a maximized browser tab">Open tab ↗</button>
+          <button class="btn ghost small hidden" id="flow-native-fullscreen" title="Use the browser fullscreen mode">Fullscreen</button>
+          <button class="btn ghost small hidden" id="flow-exit-full" title="Leave the full flow view">Exit full view</button>
           <button class="btn danger small" id="flow-stop-run" disabled>■ Stop</button>
         </div>
       </div>
-      <div class="flow-layout">
+      <div class="flow-layout" id="flow-layout">
         <div class="card flow-card">
           <div class="flow-legend">
             <span><i class="dot idle"></i> Idle</span>
@@ -167,12 +172,16 @@
             <span><i class="dot completed"></i> Completed</span>
             <span><i class="dot waiting"></i> Waiting</span>
             <span><i class="dot failed"></i> Error</span>
+            <span><i class="edge-key chain"></i> Command chain</span>
+            <span><i class="edge-key dotted"></i> Live connection</span>
+            <span><i class="edge-key glow"></i> Dictator line</span>
           </div>
           <div id="flow-canvas" class="flow-canvas">
             <svg id="flow-edges" class="flow-edges"></svg>
             <div id="flow-nodes" class="flow-nodes"></div>
           </div>
         </div>
+        <div class="flow-resizer" id="flow-resizer" role="separator" aria-orientation="vertical" title="Drag to resize the flow and company feed"></div>
         <div class="flow-side">
           <div class="card flow-events-card">
             <div class="card-head"><h2>Company feed</h2><span class="tag" id="flow-feed-count">0</span></div>
@@ -183,6 +192,16 @@
             <div id="flow-event-list" class="timeline scroll tall"></div>
           </div>
         </div>
+      </div>
+      <div id="agent-live-window" class="agent-live-window hidden" aria-live="polite">
+        <div class="agent-live-head">
+          <div>
+            <div class="agent-live-title" id="agent-live-title">Agent</div>
+            <div class="agent-live-sub" id="agent-live-sub"></div>
+          </div>
+          <button class="btn ghost small" id="agent-live-close" title="Close">×</button>
+        </div>
+        <div class="agent-live-body" id="agent-live-body"></div>
       </div>
     </section>
 

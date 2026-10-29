@@ -54,3 +54,6 @@ def test_api_health_and_registry(settings):
         assert "valid" in validation.json()
         root = client.get("/")
         assert root.status_code == 200
+        flow = client.get("/flow")
+        assert flow.status_code == 200
+        assert "Live orchestration flow" in flow.text

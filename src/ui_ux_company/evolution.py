@@ -176,6 +176,11 @@ class EvolutionEngine:
                 "immutable": self.registry.data.get("evolution_policy", {}).get("immutable", []),
                 "mutable": self.registry.data.get("evolution_policy", {}).get("mutable", []),
                 "rejected_proposals": rejected,
+                "company_context": {
+                    "note": "Shared company context. Use it only for awareness; do not repeat it.",
+                    "recent_runs": (state.get("metrics", {}) or {}).get("recent_runs", []),
+                    "enabled_agents": self.registry.enabled_agent_ids(),
+                },
             },
             run_id=state["proposal_id"],
             task_id="org_evolution",
@@ -247,12 +252,35 @@ class EvolutionEngine:
             self.storage.update_evolution(state["proposal_id"], status="approved", decision=decision)
             return {"approved": True, "decision": decision, "status": "apply"}
         approval = self.storage.pending_approval_for_run(state["proposal_id"], "evolution_approval")
+        risk = proposal.get("expected_impact", {}).get("risk") if isinstance(proposal.get("expected_impact"), dict) else ""
+        summary = (
+            f"The company wants to change how it works: {proposal.get('title', 'Evolution proposal')}. "
+            f"Risk: {risk or 'not stated'}. Open details for the exact change, evidence, and rollback plan."
+        )
+        change_lines = []
+        for change in (proposal.get("changes") or [])[:4]:
+            change_lines.append(
+                f"- {change.get('type', 'change')} on {change.get('target', 'registry')}: "
+                f"{change.get('to', '')}"
+            )
+        details = "\n".join(
+            [
+                f"Problem: {proposal.get('problem', '')}",
+                "",
+                "Proposed change:",
+                *(change_lines or ["- No structured change supplied."]),
+                "",
+                f"Expected impact: {json.dumps(proposal.get('expected_impact', {}), ensure_ascii=False, default=str)}",
+                f"Risks: {json.dumps(proposal.get('risks', []), ensure_ascii=False, default=str)}",
+                f"Rollback: {proposal.get('rollback_plan', 'Not stated.')}",
+            ]
+        )
         if not approval:
             approval = self.storage.create_approval(
                 state["proposal_id"],
                 "evolution_approval",
                 "Approve org evolution",
-                f"{proposal.get('title', 'Evolution proposal')}\n\n{proposal.get('problem', '')}",
+                summary,
                 [
                     {"option_id": "approve", "label": "Approve and apply safe changes", "impact": "Registry version bumps; structural changes still require a deploy."},
                     {"option_id": "reject", "label": "Reject", "impact": "No change."},
@@ -260,13 +288,21 @@ class EvolutionEngine:
                 from_agent="org_evolution_auditor",
                 from_codename=self.registry.codename("org_evolution_auditor"),
                 sla_minutes=1440,
+                summary=summary,
+                details=details,
             )
         await self._event(
             state["proposal_id"],
             "approval.required",
             "Evolution approval required",
             "dictator",
-            {"approval_id": approval["approval_id"], "proposal": proposal, "evaluation": evaluation},
+            {
+                "approval_id": approval["approval_id"],
+                "summary": summary,
+                "details": details,
+                "proposal": proposal,
+                "evaluation": evaluation,
+            },
         )
         decision = interrupt(
             {
@@ -274,6 +310,8 @@ class EvolutionEngine:
                 "proposal_id": state["proposal_id"],
                 "approval_id": approval["approval_id"],
                 "title": "Approve org evolution",
+                "summary": summary,
+                "details": details,
                 "proposal": proposal,
                 "evaluation": evaluation,
                 "options": approval.get("options", []),

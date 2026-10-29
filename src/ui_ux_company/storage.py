@@ -48,6 +48,8 @@ CREATE TABLE IF NOT EXISTS approvals (
   gate TEXT NOT NULL,
   title TEXT NOT NULL,
   message TEXT,
+  summary TEXT,
+  details TEXT,
   options_json TEXT,
   status TEXT NOT NULL DEFAULT 'pending',
   decision_json TEXT,
@@ -127,6 +129,8 @@ class Storage:
                 "from_codename": "TEXT",
                 "sla_minutes": "INTEGER",
                 "due_at": "TEXT",
+                "summary": "TEXT",
+                "details": "TEXT",
             }.items():
                 if column not in columns:
                     self._conn.execute(f"ALTER TABLE approvals ADD COLUMN {column} {definition}")
@@ -288,6 +292,8 @@ class Storage:
         from_agent: str | None = None,
         from_codename: str | None = None,
         sla_minutes: int | None = None,
+        summary: str = "",
+        details: str = "",
     ) -> dict[str, Any]:
         approval_id = new_id("appr")
         now = utcnow()
@@ -295,13 +301,15 @@ class Storage:
         if sla_minutes:
             due_at = (datetime.now(timezone.utc) + timedelta(minutes=int(sla_minutes))).isoformat()
         self._execute(
-            "INSERT INTO approvals(approval_id,run_id,gate,title,message,options_json,status,from_agent,from_codename,sla_minutes,due_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO approvals(approval_id,run_id,gate,title,message,summary,details,options_json,status,from_agent,from_codename,sla_minutes,due_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 approval_id,
                 run_id,
                 gate,
                 title,
                 message,
+                summary or message,
+                details or message,
                 json.dumps(options or [], default=str),
                 "pending",
                 from_agent,

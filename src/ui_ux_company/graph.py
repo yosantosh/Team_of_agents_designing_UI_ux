@@ -278,6 +278,96 @@ class CompanyGraph:
         run_id = state["run_id"]
         await self.bus.publish(run_id, event_type, message, agent_id, data)
 
+    @staticmethod
+    def _clip(value: Any, limit: int = 240) -> str:
+        text = " ".join(str(value or "").split())
+        if len(text) <= limit:
+            return text
+        return text[:limit].rsplit(" ", 1)[0] + "…"
+
+    def _agent_brief(self, agent_id: str | None) -> str:
+        if not agent_id:
+            return "System"
+        if agent_id == "dictator":
+            return "Dictator"
+        try:
+            agent = self.registry.agent(agent_id)
+        except KeyError:
+            return str(agent_id)
+        title = str(agent.get("title") or agent_id)
+        codename = str(agent.get("codename") or "").strip()
+        return f"{codename} {title}".strip()
+
+    def _company_context(self, state: CompanyState) -> dict[str, Any]:
+        """Small shared picture of the company for every agent.
+
+        It is deliberately awareness-only: agents should not repeat it or do another
+        agent's job. It gives each specialist the same one-sentence company feed so
+        they do not work from a stale or isolated view.
+        """
+        run_id = str(state.get("run_id") or "")
+        messages = self.storage.list_agent_messages(run_id, limit=80) if run_id else []
+        events = self.storage.list_events(run_id, limit=200) if run_id else []
+        artifacts = self.storage.list_artifacts(run_id) if run_id else []
+        statuses: dict[str, str] = {}
+        for event in events:
+            agent_id = event.get("agent_id")
+            if not agent_id:
+                continue
+            if event.get("type") == "agent.started":
+                statuses[str(agent_id)] = "running"
+            elif event.get("type") == "agent.completed":
+                statuses[str(agent_id)] = "completed"
+            elif event.get("type") == "agent.failed":
+                statuses[str(agent_id)] = "failed"
+        active = [self._agent_brief(agent_id) for agent_id, status in statuses.items() if status == "running"]
+        recent: list[str] = []
+        for message in messages[-12:]:
+            did = self._clip(message.get("did"), 150)
+            doing = self._clip(message.get("doing"), 150)
+            sentence = did or doing or str(message.get("kind") or "activity")
+            if doing and doing != did:
+                sentence = f"{sentence}; {doing}"
+            recent.append(
+                f"{self._agent_brief(message.get('from_agent'))} -> "
+                f"{self._agent_brief(message.get('to_agent'))}: {sentence}"
+            )
+        pending = self.storage.pending_approval_for_run(run_id) if run_id else None
+        return {
+            "note": (
+                "Shared live company context. Use it only for awareness and alignment; "
+                "do not repeat it, and do not take over another agent's work."
+            ),
+            "stage": state.get("status"),
+            "mode": state.get("mode"),
+            "dictator_decree": self._clip(state.get("prompt"), 500),
+            "active_agents": active,
+            "recent_activity": recent,
+            "artifacts_ready": [str(a.get("name")) for a in artifacts[-10:]],
+            "pending_decision": self._clip((pending or {}).get("summary") or (pending or {}).get("title"), 200),
+        }
+
+    @staticmethod
+    def _critique_detail(critique: dict[str, Any]) -> str:
+        lines = [
+            f"Verdict: {critique.get('verdict', 'n/a')}",
+            f"Score: {critique.get('score', 'n/a')}",
+        ]
+        issues = critique.get("issues") or []
+        if issues:
+            lines.append("")
+            lines.append("Issues:")
+            for issue in issues[:8]:
+                lines.append(
+                    f"- [{issue.get('severity', 'issue')}] {issue.get('area', 'design')}: "
+                    f"{issue.get('problem', '')} Fix: {issue.get('fix', '')}"
+                )
+        conflicts = critique.get("conflicts_remaining") or []
+        if conflicts:
+            lines.append("")
+            lines.append("Open conflicts: " + "; ".join(str(item) for item in conflicts[:5]))
+        return "\n".join(lines)
+
     async def _call(
         self,
         state: CompanyState,
@@ -307,11 +397,12 @@ class CompanyGraph:
             },
         )
         started = time.monotonic()
+        shared_context = self._company_context(state)
         try:
             result = await self.agents.run(
                 role,
                 goal,
-                context,
+                {**context, "company_context": shared_context},
                 images=images,
                 run_id=state["run_id"],
                 task_id=role,
@@ -531,6 +622,7 @@ class CompanyGraph:
             "project": self.profile.project,
             "target_manifest": state.get("target_manifest", {}),
             "android_quality": self.profile.android_quality,
+            "company_context": self._company_context(state),
         }
         jobs = [
             (
@@ -866,11 +958,16 @@ class CompanyGraph:
         critique = state.get("critique", {})
         screen_spec = state.get("screen_spec", {})
         title = "Approve the design direction"
-        message = (
-            f"{screen_spec.get('goal', 'Design ready for approval.')} "
-            f"Critic score: {critique.get('score', 'n/a')}. "
-            "Approving allows implementation to start."
+        score = critique.get("score", "n/a")
+        summary = (
+            f"The critic scored the design {score}. "
+            "It is ready for your decision; approving lets the company start implementation."
         )
+        details = (
+            f"{screen_spec.get('goal', 'Design ready for approval.')}\n\n"
+            + self._critique_detail(critique)
+        )
+        message = summary
         options = [
             {"option_id": "approve", "label": "Approve design", "impact": "Proceed to implementation."},
             {"option_id": "reject", "label": "Send back for rework", "impact": "The design team revises before implementation."},
@@ -886,6 +983,8 @@ class CompanyGraph:
                 from_agent="independent_design_critic",
                 from_codename=self.registry.codename("independent_design_critic"),
                 sla_minutes=self._gate_sla("human_design_approval"),
+                summary=summary,
+                details=details,
             )
             decision = {"decision": "approve", "option_id": "approve", "notes": "Auto-approved in demo mode.", "mode": "auto"}
             self.storage.decide_approval(approval["approval_id"], decision)
@@ -904,13 +1003,22 @@ class CompanyGraph:
                 from_agent="independent_design_critic",
                 from_codename=self.registry.codename("independent_design_critic"),
                 sla_minutes=self._gate_sla("human_design_approval"),
+                summary=summary,
+                details=details,
             )
         await self._event(
             state,
             "approval.required",
             "Design approval required",
             "dictator",
-            {"approval_id": approval["approval_id"], "gate": "human_design_approval", "title": title, "message": message, "options": options},
+            {
+                "approval_id": approval["approval_id"],
+                "gate": "human_design_approval",
+                "title": title,
+                "summary": summary,
+                "details": details,
+                "options": options,
+            },
         )
         await self._message(
             state,
@@ -919,7 +1027,7 @@ class CompanyGraph:
             "escalation",
             did="Design passed critique; approval requested",
             doing="Waiting for the Dictator",
-            needs="Approve, reject, or dictate the design direction",
+            needs=summary,
             artifact="design_critique.json",
         )
         decision = interrupt(
@@ -929,6 +1037,8 @@ class CompanyGraph:
                 "approval_id": approval["approval_id"],
                 "title": title,
                 "message": message,
+                "summary": summary,
+                "details": details,
                 "options": options,
             }
         )
@@ -1352,16 +1462,50 @@ class CompanyGraph:
         critique = state.get("critique", {})
         qa = state.get("qa", {})
         reason = "Work did not pass the required gates within the rework limit, or the Dictator rejected the design."
+        summary = "The company stopped at a gate and needs your decision. Open details for the short reason and the options."
         if critique.get("verdict") == "ESCALATE":
             reason = "The independent critic escalated a design decision."
+            critical = [
+                issue for issue in (critique.get("issues") or []) if issue.get("severity") == "critical"
+            ]
+            summary = (
+                "The design critic found blockers, so code did not start. "
+                f"{len(critical)} critical issue(s) need a decision or a rework."
+            )
         code_edits = (state.get("implementation") or {}).get("code_edits") or {}
         if code_edits.get("status") in {"failed", "no_changes", "disabled"}:
             reason = (
                 f"Code worker {code_edits.get('status')}: "
                 f"{code_edits.get('reason') or 'no reviewable code patch was produced'}"
             )
+            summary = (
+                "The code worker could not produce a reviewable code change, so I stopped the run. "
+                "Open details for the reason and the next options."
+            )
         if qa.get("gate") == "not_run":
             reason = "QA evidence is missing; production release is blocked until real screenshots and test evidence exist."
+            summary = (
+                "QA has no real screenshots or tests yet, so release is blocked. "
+                "Open details to see what evidence is missing."
+            )
+        details_parts = [reason]
+        if critique:
+            details_parts.append("")
+            details_parts.append(self._critique_detail(critique))
+        if qa:
+            details_parts.append("")
+            details_parts.append(
+                f"QA gate: {qa.get('gate', 'n/a')}. "
+                f"Visual: {qa.get('visual', {}).get('status', 'n/a') if isinstance(qa.get('visual'), dict) else qa.get('visual', 'n/a')}. "
+                f"Functional/a11y: {qa.get('functional', {}).get('status', 'n/a') if isinstance(qa.get('functional'), dict) else qa.get('functional', 'n/a')}."
+            )
+        if code_edits:
+            details_parts.append("")
+            details_parts.append(
+                f"Code worker status: {code_edits.get('status')}. "
+                f"Changed files: {', '.join(code_edits.get('changed_files') or []) or 'none'}."
+            )
+        details = "\n".join(details_parts)
         options = [
             {"option_id": "force", "label": "Dictator override and continue", "impact": "Proceed with a recorded override; safety and release risks remain owned by the Dictator."},
             {"option_id": "rework", "label": "Approve another rework cycle", "impact": "Reset the relevant rework counter and try again."},
@@ -1371,16 +1515,20 @@ class CompanyGraph:
             state["run_id"],
             "dictator_escalation",
             "Dictator decision required",
-            reason,
+            summary,
             options,
             from_agent="chief_orchestrator",
             from_codename=self.registry.codename("chief_orchestrator"),
             sla_minutes=240,
+            summary=summary,
+            details=details,
         )
         escalation = {
             "run_id": state["run_id"],
             "approval_id": approval["approval_id"],
             "reason": reason,
+            "summary": summary,
+            "details": details,
             "critique": critique,
             "qa_gate": qa.get("gate"),
             "options": options,
@@ -1392,7 +1540,14 @@ class CompanyGraph:
             "approval.required",
             "Escalation requires a Dictator decision",
             "chief_orchestrator",
-            {"approval_id": approval["approval_id"], "gate": "dictator_escalation", "reason": reason, "options": options},
+            {
+                "approval_id": approval["approval_id"],
+                "gate": "dictator_escalation",
+                "summary": summary,
+                "details": details,
+                "reason": reason,
+                "options": options,
+            },
         )
         await self._message(
             state,
@@ -1401,7 +1556,7 @@ class CompanyGraph:
             "escalation",
             did="Escalating a one-way-door decision",
             doing="Waiting for the Dictator",
-            needs=reason,
+            needs=summary,
             artifact="escalation.json",
         )
         return {"status": "escalated", "approval_id": approval["approval_id"]}

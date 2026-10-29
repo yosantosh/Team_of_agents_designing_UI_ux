@@ -103,3 +103,61 @@ def test_build_run_hands_approved_design_to_code_worker(settings):
     finally:
         asyncio.run(graph.aclose())
         graph.storage.close()
+
+
+def test_company_context_is_short_and_shared(settings):
+    graph = CompanyGraph(settings)
+    try:
+        graph.storage.create_run("run_ctx", "Redesign the feed", "design")
+        graph.storage.add_agent_message(
+            "run_ctx", "chief_orchestrator", "visual_ui_designer", "handoff",
+            did="Assigned Screen spec", doing="Designing the feed",
+        )
+        graph.storage.add_agent_message(
+            "run_ctx", "visual_ui_designer", "design_lead", "artifact",
+            did="Completed Screen spec", doing="Handing result back",
+        )
+        context = graph._company_context(
+            {"run_id": "run_ctx", "prompt": "Redesign the feed", "mode": "design", "status": "design_system"}
+        )
+        assert context["recent_activity"]
+        assert any("Visual UI Designer" in item for item in context["recent_activity"])
+        assert "do not repeat" in context["note"]
+        assert context["stage"] == "design_system"
+    finally:
+        asyncio.run(graph.aclose())
+        graph.storage.close()
+
+
+def test_escalation_has_easy_summary_and_expandable_details(settings):
+    graph = CompanyGraph(settings)
+    try:
+        graph.storage.create_run("run_escalate", "Redesign the feed", "build")
+        result = asyncio.run(
+            graph._escalate(
+                {
+                    "run_id": "run_escalate",
+                    "critique": {
+                        "verdict": "ESCALATE",
+                        "score": 0.42,
+                        "issues": [
+                            {
+                                "severity": "critical",
+                                "area": "tokens",
+                                "problem": "Accent text contrast is below 4.5:1.",
+                                "fix": "Use a text-safe accent.",
+                            }
+                        ],
+                    },
+                    "qa": {},
+                    "implementation": {},
+                }
+            )
+        )
+        approval = graph.storage.get_approval(result["approval_id"])
+        assert approval["summary"].startswith("The design critic found blockers")
+        assert "Accent text contrast" in approval["details"]
+        assert approval["message"] == approval["summary"]
+    finally:
+        asyncio.run(graph.aclose())
+        graph.storage.close()
