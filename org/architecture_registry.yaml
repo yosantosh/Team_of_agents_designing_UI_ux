@@ -19,6 +19,27 @@ defaults:
   require_evidence_for_release: true
   allow_unverified_release: false
 
+playbooks:
+  explore:
+    goal: "Research, evidence, and 2-3 design directions without implementation."
+    stages: [intake, target_ui, discovery, synthesis, design_system, visual_design, design_contract, critique, human_gate, learn]
+    stop_after: human_gate
+  design:
+    goal: "Full design package, independent critique, and Dictator approval."
+    stages: [intake, target_ui, discovery, synthesis, design_system, visual_design, design_contract, critique, human_gate, learn]
+  build:
+    goal: "Design package plus a surgical Compose implementation plan."
+    stages: [intake, target_ui, discovery, synthesis, design_system, visual_design, design_contract, critique, human_gate, implement, learn]
+  ship:
+    goal: "Design, implementation, real QA evidence, and release candidate."
+    stages: [intake, target_ui, discovery, synthesis, design_system, visual_design, design_contract, critique, human_gate, implement, qa, manager_eval, release, learn]
+  audit:
+    goal: "Critique and QA the current UI; no new visual direction unless the Dictator asks."
+    stages: [intake, research_current_ui, ia_audit, design_system_audit, critique, human_gate, qa, manager_eval, learn]
+  fix:
+    goal: "Fast, surgical micro-fix with visual diff and focused QA."
+    stages: [intake, target_ui, synthesis, visual_design, critique, human_gate, implement, qa, learn]
+
 models:
   reasoner:
     provider: opencode
@@ -81,21 +102,144 @@ tiers:
     name: "Meta, Memory & Evolution"
     purpose: "Design ops, evals, org memory, independent evolution proposals"
 
+tier_leads:
+  1: discovery_lead
+  2: design_lead
+  3: engineering_lead
+  4: quality_lead
+  5: meta_lead
+
 agents:
+  - id: ceo
+    title: "CEO — Company Operating Officer"
+    codename: "A1"
+    tier: 0
+    enabled: true
+    prompt_key: ceo
+    model: reasoner
+    reports_to: null
+    is_lead: true
+    real_world_equivalent: "Chief Executive Officer / Head of Product"
+    mission: "Own the company operating system, protect the Dictator's intent, set priorities and constraints, resolve cross-tier conflicts, and escalate only major or one-way-door decisions to the human Dictator."
+    inputs: [dictator_decree, company_brief, run_snapshot, budget, org_health]
+    outputs: [ceo_directive, priority_decision, escalation]
+    tools: [company_knowledge, registry, org_graph, budget_ledger]
+    gates: [ceo_review]
+    kpis: [strategic_alignment, escalation_quality, org_health]
+    failure_modes: [overreach, hiding_bad_news, bypassing_dictator]
+
   - id: chief_orchestrator
     title: "Chief UI/UX Orchestrator"
+    codename: "A2"
     tier: 0
     enabled: true
     prompt_key: manager
     model: reasoner
+    reports_to: ceo
+    is_lead: true
     real_world_equivalent: "VP of Product Design & Principal Android Release Director"
-    mission: "Convert a Dictator decree into a task DAG, route it to pods, enforce gates and budgets, and escalate only one-way-door decisions."
-    inputs: [change_request, registry, project_profile, run_metrics]
-    outputs: [task_dag, evaluation_report, escalation]
-    tools: [registry, artifact_store, event_bus, budget_ledger]
+    mission: "Convert a Dictator decree into a task DAG, route it through the tier leads, enforce gates and budgets, and escalate only one-way-door decisions."
+    inputs: [change_request, company_brief, registry, project_profile, run_metrics]
+    outputs: [routing_plan, task_dag, evaluation_report, escalation]
+    tools: [company_knowledge, registry, artifact_store, event_bus, budget_ledger]
     gates: [manager_evaluation]
-    kpis: [first_pass_yield, cycle_time, rework_rate, budget adherence]
+    kpis: [first_pass_yield, cycle_time, rework_rate, budget_adherence]
     failure_modes: [scope_creep, silent_assumptions, self_grading, runaway_retries]
+
+  - id: discovery_lead
+    title: "Discovery & Standards Lead"
+    codename: "A3"
+    tier: 1
+    enabled: true
+    prompt_key: lead
+    model: reasoner
+    reports_to: chief_orchestrator
+    is_lead: true
+    manages: [product_analyst, ux_researcher, android_platform_designer, ia_interaction_designer, content_designer, target_ui_analyst, accessibility_specialist, localization_specialist]
+    real_world_equivalent: "Director of Product Discovery"
+    mission: "Manage Tier 1: frame the problem, gather evidence, enforce Android standards, own IA/flows, and make upstream design criteria testable."
+    inputs: [change_request, routing_plan, company_brief]
+    outputs: [discovery_brief, tier_status, escalations]
+    tools: [company_knowledge, artifact_store, event_bus]
+    gates: [tier_1_review]
+    kpis: [upstream_completeness, evidence_quality, rework_prevented]
+    failure_modes: [late_criteria, research_theater, hiding_conflicts]
+
+  - id: design_lead
+    title: "Design Lead"
+    codename: "A4"
+    tier: 2
+    enabled: true
+    prompt_key: lead
+    model: reasoner
+    reports_to: chief_orchestrator
+    is_lead: true
+    manages: [design_system_architect, component_design_engineer, visual_ui_designer, design_contract_editor, motion_haptics_designer, brand_illustration_designer, independent_design_critic]
+    real_world_equivalent: "Director of Product Design"
+    mission: "Manage Tier 2: design system, visual craft, motion, target fidelity, design contract, and independent critique."
+    inputs: [discovery_brief, design_system, target_manifest, routing_plan]
+    outputs: [design_decision, tier_status, escalations]
+    tools: [company_knowledge, artifact_store, event_bus]
+    gates: [design_critique, tier_2_review]
+    kpis: [first_pass_critique, target_fidelity, design_consistency]
+    failure_modes: [taste_bias, crit_bypass, contract_averaging]
+
+  - id: engineering_lead
+    title: "Engineering Lead"
+    codename: "A5"
+    tier: 3
+    enabled: true
+    prompt_key: lead
+    model: coder
+    reports_to: chief_orchestrator
+    is_lead: true
+    manages: [android_tech_lead, compose_implementer, design_engineer, motion_shader_engineer]
+    real_world_equivalent: "Director of Android Design Engineering"
+    mission: "Manage Tier 3: implementation architecture, Compose, design-code parity, shared-file ownership, and merge safety."
+    inputs: [design_contract, screen_spec, repo_state, routing_plan]
+    outputs: [implementation_decision, tier_status, escalations]
+    tools: [company_knowledge, git_worktree, gradle, event_bus]
+    gates: [code_review, tier_3_review]
+    kpis: [build_success, visual_fidelity, merge_conflicts]
+    failure_modes: [shared_file_collisions, over_engineering, silent_scope_change]
+
+  - id: quality_lead
+    title: "Quality & Release Lead"
+    codename: "A6"
+    tier: 4
+    enabled: true
+    prompt_key: lead
+    model: reasoner
+    reports_to: chief_orchestrator
+    is_lead: true
+    manages: [visual_qa_inspector, functional_a11y_qa, performance_qa, security_privacy_reviewer, trust_safety_reviewer, release_manager, analytics_experimentation_lead]
+    real_world_equivalent: "Director of Quality & Release"
+    mission: "Manage Tier 4: visual, functional, accessibility, performance, security, T&S, and release evidence. Block unverified releases."
+    inputs: [implementation, screen_spec, current_ui_manifest, target_manifest, routing_plan]
+    outputs: [quality_decision, tier_status, release_recommendation, escalations]
+    tools: [company_knowledge, screenshot_capture, device_farm, event_bus]
+    gates: [visual_qa, functional_a11y, release, tier_4_review]
+    kpis: [defect_escape, a11y_defect_escape, rollback_rate]
+    failure_modes: [rubber_stamping, missing_evidence, flagship_only]
+
+  - id: meta_lead
+    title: "Meta, Memory & Evolution Lead"
+    codename: "A7"
+    tier: 5
+    enabled: true
+    prompt_key: lead
+    model: reasoner
+    reports_to: chief_orchestrator
+    is_lead: true
+    manages: [design_ops_librarian, eval_red_team, org_evolution_auditor]
+    real_world_equivalent: "Director of Design Operations & AI Quality"
+    mission: "Manage Tier 5: org memory, design debt, evals, red-team, and independent evolution proposals. Never self-approve."
+    inputs: [run_history, token_ledger, qa_reports, registry, eval_reports]
+    outputs: [memory_update, eval_report, evolution_proposal]
+    tools: [company_knowledge, registry, analytics, langsmith_optional]
+    gates: [eval_review, evolution_approval]
+    kpis: [memory_recall, eval_coverage, proposal_hit_rate]
+    failure_modes: [change_for_change, self_approval, stale_memory]
 
   - id: product_analyst
     title: "Product Analyst"
@@ -583,39 +727,84 @@ gates:
   - id: product_brief_review
     owner: product_analyst
     required: true
+    sla_minutes: 1440
     pass_criteria: "Problem, users, success metrics, constraints, non-goals, and acceptance criteria are explicit."
+  - id: ceo_review
+    owner: ceo
+    required: false
+    sla_minutes: 240
+    condition: "L4 autonomy, or a cross-tier / one-way-door decision."
+    pass_criteria: "The CEO agent records a directive, constraints, and any escalation to the Dictator."
+  - id: tier_1_review
+    owner: discovery_lead
+    required: true
+    sla_minutes: 480
+    pass_criteria: "Upstream criteria are complete, evidence-backed, and testable before design."
+  - id: tier_2_review
+    owner: design_lead
+    required: true
+    sla_minutes: 480
+    pass_criteria: "Design contract is coherent and the critic has reviewed it."
+  - id: tier_3_review
+    owner: engineering_lead
+    required: true
+    sla_minutes: 480
+    pass_criteria: "Implementation plan is buildable and shared-file changes are owned."
+  - id: tier_4_review
+    owner: quality_lead
+    required: true
+    sla_minutes: 240
+    pass_criteria: "Real QA evidence exists and release blockers are explicit."
+  - id: tier_5_review
+    owner: meta_lead
+    required: true
+    sla_minutes: 1440
+    pass_criteria: "Memory, eval, and evolution evidence is recorded."
   - id: design_critique
     owner: independent_design_critic
     required: true
+    sla_minutes: 240
     pass_criteria: "Score >= 0.80; no critical hierarchy, token, state, target-fidelity, or Android-law issues."
   - id: human_design_approval
     owner: dictator
     required: true
+    sla_minutes: 1440
     pass_criteria: "Dictator approves the design direction or explicitly overrides with a recorded rationale."
   - id: visual_qa
     owner: visual_qa_inspector
     required: true
+    sla_minutes: 240
     pass_criteria: "All captured screens pass perceptual/pixel thresholds on the required device matrix; no critical clipping/overlap/contrast defects."
   - id: functional_a11y
     owner: functional_a11y_qa
     required: true
+    sla_minutes: 240
     pass_criteria: "All critical flows pass; no critical a11y defects; 48dp targets; TalkBack labels; 200% font; offline/error states verified."
   - id: security_privacy
     owner: security_privacy_reviewer
     required: false
+    sla_minutes: 240
     condition: "Feature touches permissions, PII, auth, payments, or external content."
   - id: trust_safety
     owner: trust_safety_reviewer
     required: false
+    sla_minutes: 240
     condition: "Feature touches reporting, blocking, minors, moderation, or public content."
   - id: manager_evaluation
     owner: chief_orchestrator
     required: true
+    sla_minutes: 120
     pass_criteria: "All required gates pass; evidence is present; budget and scope are within policy."
   - id: release
     owner: release_manager
     required: true
+    sla_minutes: 240
     pass_criteria: "Release candidate, rollout plan, rollback plan, monitoring plan, and Dictator release approval exist."
+  - id: evolution_approval
+    owner: dictator
+    required: true
+    sla_minutes: 1440
+    pass_criteria: "Dictator approves, rejects, or dictates the evolution proposal."
 
 artifact_types:
   - product_brief

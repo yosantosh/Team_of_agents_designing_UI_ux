@@ -29,6 +29,17 @@ design_system:
     role: "optional_collaboration_and_export"  # optional | primary
     note: "Add a FigmaAdapter later for frame import/export, variables/styles, and critique comments. Not a runtime dependency."
 
+current_ui:
+  mode: "auto"                           # auto | required | off
+  path: "docs/screenshots_of_current_ui"
+  candidate_paths:
+    - "docs/screenshots_of_current_ui"
+    - "docs/current_ui"
+    - "current_ui_example"
+  manifest: "artifacts/current_ui/manifest.json"
+  search_patterns: ["current_ui", "current-ui", "screenshots_of_current_ui", "current_screens"]
+  note: "Current UI is the visual-regression / audit baseline, not the design target."
+
 target_ui:
   mode: "auto"                           # auto | required | off
   path: "docs/target_ui"
@@ -38,6 +49,7 @@ target_ui:
     - "/home/pluto/Documents/Target_ui"
   manifest: "artifacts/target_ui/manifest.json"
   precedence: "tiered"                   # tiered | pixel_perfect | inspiration
+  fidelity: "exact"                      # exact | close | inspiration
   confidence_threshold: 0.80
   on_conflict: "escalate"
   max_images_per_run: 8
@@ -102,6 +114,13 @@ android_quality:
 
 autonomy:
   level: "L2"                            # L0 | L1 | L2 | L3 | L4
+  ceo_agent: "ceo"
+  governance:
+    L0: "human_ceo"                      # Human is CEO + Dictator; CEO agent advises
+    L1: "human_ceo"
+    L2: "human_ceo"
+    L3: "shared_ceo"                     # CEO agent operates; major decisions to Human
+    L4: "agent_ceo"                      # CEO agent runs; Human is Dictator only
   human_design_gate: true
   human_release_gate: true
   auto_merge_low_risk: false

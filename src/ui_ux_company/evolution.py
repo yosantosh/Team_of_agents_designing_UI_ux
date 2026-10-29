@@ -16,6 +16,7 @@ from .config import Settings
 from .events import EventBus
 from .gateway import ModelGateway
 from .models import EvolutionProposal, new_id, utcnow
+from .prompts import work_label
 from .registry import Registry, load_registry, save_yaml
 from .storage import Storage
 
@@ -140,7 +141,10 @@ class EvolutionEngine:
             "agent.started",
             "Org evolution auditor diagnosing",
             "org_evolution_auditor",
-            {"model": state.get("model") or self.settings.model_override or "registry default"},
+            {
+                "model": state.get("model") or self.settings.model_override or "registry default",
+                "work_label": work_label("org_evolution_auditor"),
+            },
         )
         result = await self.agents.run(
             "org_evolution_auditor",
@@ -234,6 +238,9 @@ class EvolutionEngine:
                     {"option_id": "approve", "label": "Approve and apply safe changes", "impact": "Registry version bumps; structural changes still require a deploy."},
                     {"option_id": "reject", "label": "Reject", "impact": "No change."},
                 ],
+                from_agent="org_evolution_auditor",
+                from_codename=self.registry.codename("org_evolution_auditor"),
+                sla_minutes=1440,
             )
         await self._event(
             state["proposal_id"],

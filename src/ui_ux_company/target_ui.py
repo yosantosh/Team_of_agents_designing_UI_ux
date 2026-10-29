@@ -53,12 +53,108 @@ def guess_screen(filename: str) -> str:
     return cleaned or "unknown"
 
 
+def _resolve_manifest_path(settings: Settings, raw: str | None, default: str) -> Path:
+    path = Path(str(raw or default)).expanduser()
+    if path.is_absolute():
+        return path
+    raw_text = str(raw or default).replace("\\", "/")
+    if raw_text.startswith("artifacts/"):
+        return settings.artifacts_dir / raw_text[len("artifacts/"):]
+    return settings.root / path
+
+
 def _manifest_path(settings: Settings, profile: ProjectProfile) -> Path:
-    raw = profile.target_ui.get("manifest", "artifacts/target_ui/manifest.json")
-    path = Path(str(raw)).expanduser()
-    if not path.is_absolute():
-        path = settings.root / path
-    return path
+    return _resolve_manifest_path(
+        settings,
+        profile.target_ui.get("manifest"),
+        "artifacts/target_ui/manifest.json",
+    )
+
+
+def _current_manifest_path(settings: Settings, profile: ProjectProfile) -> Path:
+    return _resolve_manifest_path(
+        settings,
+        profile.data.get("current_ui", {}).get("manifest"),
+        "artifacts/current_ui/manifest.json",
+    )
+
+
+def discover_current_ui_path(settings: Settings, profile: ProjectProfile) -> Path | None:
+    config = profile.data.get("current_ui", {})
+    candidates = [str(settings.current_ui_path)]
+    if config.get("path"):
+        candidates.append(str(config["path"]))
+    candidates.extend(str(p) for p in config.get("candidate_paths", []))
+    for raw in candidates:
+        path = Path(raw).expanduser()
+        if not path.is_absolute():
+            path = settings.root / path
+        if path.exists() and path.is_dir():
+            images = [p for p in path.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS]
+            if images:
+                return path
+    return None
+
+
+def scan_current_ui(
+    settings: Settings,
+    profile: ProjectProfile,
+    *,
+    path: Path | None = None,
+) -> TargetManifest:
+    target_path = path or discover_current_ui_path(settings, profile)
+    manifest = TargetManifest(
+        source_path=str(target_path) if target_path else None,
+        precedence="baseline",
+        confidence_threshold=1.0,
+        status="not_available",
+    )
+    if not target_path or not target_path.exists():
+        manifest.notes.append("No current-UI screenshots found; visual regression needs a baseline.")
+        _write_current_manifest(settings, profile, manifest)
+        return manifest
+    images = sorted(p for p in target_path.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS)
+    if not images:
+        manifest.notes.append("Current-UI folder exists but contains no supported images.")
+        _write_current_manifest(settings, profile, manifest)
+        return manifest
+    for image_path in images[:16]:
+        width = height = None
+        try:
+            with Image.open(image_path) as img:
+                width, height = img.size
+        except Exception:
+            pass
+        manifest.images.append(
+            TargetImage(
+                image_id=f"current_{len(manifest.images) + 1:02d}",
+                file=str(image_path),
+                sha256=_hash_file(image_path),
+                width=width,
+                height=height,
+                screen=guess_screen(image_path.name),
+                status="analyzed",
+                confidence=1.0,
+                rights="internal_baseline",
+            )
+        )
+    manifest.status = "scanned"
+    manifest.notes.append("Current UI baseline captured. Used for audit and visual regression, not as a design target.")
+    _write_current_manifest(settings, profile, manifest)
+    return manifest
+
+
+def _write_current_manifest(settings: Settings, profile: ProjectProfile, manifest: TargetManifest) -> None:
+    path = _current_manifest_path(settings, profile)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_current_manifest(settings: Settings, profile: ProjectProfile) -> TargetManifest:
+    path = _current_manifest_path(settings, profile)
+    if not path.exists():
+        return TargetManifest(status="not_available")
+    return TargetManifest.model_validate(json.loads(path.read_text(encoding="utf-8")))
 
 
 def scan_target_ui(

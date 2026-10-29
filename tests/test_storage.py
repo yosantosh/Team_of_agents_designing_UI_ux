@@ -12,6 +12,17 @@ def test_purge_mock_data_keeps_real_runs(settings):
         storage.create_run("run_real", "real run", "design", "completed")
         storage.update_run("run_real", state={"backend": "opencode", "demo": False})
         storage.record_usage("run_real", "task", "agent", "modal/deepseek", 200, 80)
+        storage.add_agent_message("run_real", "A1", "A2", "handoff", did="test handoff")
+        approval = storage.create_approval(
+            "run_real",
+            "human_design_approval",
+            "Approve",
+            from_agent="independent_design_critic",
+            from_codename="A22",
+            sla_minutes=60,
+        )
+        assert approval["from_agent"] == "independent_design_critic"
+        assert approval["due_at"]
 
         result = storage.purge_mock_data()
 

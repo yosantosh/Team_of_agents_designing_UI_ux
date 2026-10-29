@@ -6,6 +6,7 @@ __pycache__/
 .DS_Store
 artifacts/runs/
 artifacts/target_ui/*.json
+artifacts/current_ui/*.json
 runs/*.sqlite*
 uiux.sqlite3*
 checkpoints.sqlite3*

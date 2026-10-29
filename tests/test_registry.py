@@ -7,9 +7,14 @@ from ui_ux_company.registry import load_budget, load_profile, load_registry
 def test_registry_loads_and_validates(settings):
     registry = load_registry(settings)
     assert registry.version == "1.0.0"
-    assert len(registry.agents) >= 20
+    assert len(registry.agents) >= 30
+    assert "ceo" in registry.enabled_agent_ids()
     assert "chief_orchestrator" in registry.enabled_agent_ids()
+    assert "discovery_lead" in registry.enabled_agent_ids()
     assert "independent_design_critic" in registry.enabled_agent_ids()
+    assert registry.agent("ceo")["codename"] == "A1"
+    assert registry.agent("chief_orchestrator")["reports_to"] == "ceo"
+    assert registry.agent("product_analyst")["reports_to"] == "discovery_lead"
     assert registry.model_alias("reasoner")["model"].startswith("modal/")
 
 

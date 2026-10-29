@@ -133,7 +133,7 @@ class EvolutionProposal(FlexModel):
 
 class RunRequest(FlexModel):
     prompt: str = Field(min_length=3)
-    mode: Literal["design", "implement", "full"] = "design"
+    mode: Literal["explore", "design", "build", "ship", "audit", "fix"] = "design"
     target_ui_enabled: bool | None = None
     auto_approve: bool | None = None
     demo: bool = False

@@ -63,6 +63,7 @@ class Settings:
     budget_path: Path = field(default_factory=lambda: PROJECT_ROOT / "org" / "budget_policy.yaml")
     registry_schema_path: Path = field(default_factory=lambda: PROJECT_ROOT / "org" / "schemas" / "registry.schema.json")
     target_ui_path: Path = field(default_factory=lambda: PROJECT_ROOT / "target_ui_example")
+    current_ui_path: Path = field(default_factory=lambda: PROJECT_ROOT / "current_ui_example")
 
     model_backend: str = "opencode"       # opencode | mock (mock is test-only)
     opencode_bin: str = "opencode"
@@ -107,6 +108,7 @@ class Settings:
             budget_path=_path("UIUX_BUDGET", org_dir / "budget_policy.yaml", root),
             registry_schema_path=_path("UIUX_REGISTRY_SCHEMA", org_dir / "schemas" / "registry.schema.json", root),
             target_ui_path=_path("UIUX_TARGET_UI_PATH", root / "target_ui_example", root),
+            current_ui_path=_path("UIUX_CURRENT_UI_PATH", root / "current_ui_example", root),
             model_backend=os.getenv("UIUX_MODEL_BACKEND", "opencode").strip().lower(),
             opencode_bin=os.getenv("UIUX_OPENCODE_BIN", "opencode"),
             opencode_agent=os.getenv("UIUX_OPENCODE_AGENT", "uiux-worker"),
@@ -189,6 +191,10 @@ def load_runtime_settings(settings: Settings) -> dict[str, Any]:
         resolved = _resolve_path(str(data["target_ui_dir"]), settings.root)
         if resolved:
             settings.target_ui_path = resolved
+    if data.get("current_ui_dir"):
+        resolved = _resolve_path(str(data["current_ui_dir"]), settings.root)
+        if resolved:
+            settings.current_ui_path = resolved
     if data.get("autonomy_level"):
         settings.autonomy_level = str(data["autonomy_level"])
     return data
@@ -210,6 +216,9 @@ def save_runtime_settings(settings: Settings, **updates: Any) -> dict[str, Any]:
             continue
         if key == "target_ui_dir":
             data["target_ui_dir"] = str(value)
+        elif key == "current_ui_dir":
+            data["current_ui_dir"] = str(value)
+            settings.current_ui_path = Path(value).expanduser()
         elif key == "project_dir":
             data["project_dir"] = str(value)
         elif key == "model":

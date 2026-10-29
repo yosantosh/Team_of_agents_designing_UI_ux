@@ -13,7 +13,9 @@ const state = {
   run: null,
   runState: {},
   events: [],
+  messages: [],
   artifacts: [],
+  currentManifest: null,
   agentStatus: {},
   flowRunId: null,
   artifactRunId: null,
@@ -82,6 +84,23 @@ function statusClass(value) {
   return String(value || "idle").toLowerCase().replaceAll(" ", "_");
 }
 
+function agentById(agentId) {
+  return (state.registry?.registry?.agents || []).find((agent) => agent.id === agentId) || null;
+}
+
+function agentLabel(agentId) {
+  if (!agentId) return "System";
+  if (agentId === "dictator") return "Dictator";
+  const agent = agentById(agentId);
+  return agent ? `${agent.codename || ""} · ${agent.title || agent.id}` : agentId;
+}
+
+function currentWork(agentId) {
+  const events = (state.events || []).filter((event) => event.agent_id === agentId && event.type === "agent.started");
+  const last = events[events.length - 1];
+  return last?.data?.work_label || agentById(agentId)?.work_label || "";
+}
+
 function switchTab(name) {
   state.activeTab = name;
   if (location.hash !== `#${name}`) history.replaceState(null, "", `#${name}`);
@@ -105,7 +124,7 @@ function switchTab(name) {
 // ------------------------------------------------------------------ init
 async function init() {
   try {
-    const [health, registry, budget, pending, allApprovals, runs, target, evolutions, settings] = await Promise.all([
+    const [health, registry, budget, pending, allApprovals, runs, target, current, evolutions, settings] = await Promise.all([
       api("/api/health"),
       api("/api/registry"),
       api("/api/budget"),
@@ -113,6 +132,7 @@ async function init() {
       api("/api/approvals?status=all"),
       api("/api/runs"),
       api("/api/target-ui"),
+      api("/api/current-ui"),
       api("/api/evolve"),
       api("/api/settings"),
     ]);
@@ -123,6 +143,7 @@ async function init() {
     state.allApprovals = allApprovals.approvals || [];
     state.runs = filterProductionRuns(runs.runs || []);
     state.targetManifest = target;
+    state.currentManifest = current;
     state.evolutions = evolutions.proposals || [];
     state.settings = settings;
     await loadModels(false);
@@ -292,8 +313,13 @@ function renderRunMeta() {
     $("run-status").textContent = "idle";
     $("run-status").className = "status";
     $("run-meta").textContent = "No run selected. Issue a decree to begin.";
+    $("stop-run").disabled = true;
+    $("flow-stop-run").disabled = true;
     return;
   }
+  const terminal = ["completed", "failed", "stopped", "escalated"].includes(run.status);
+  $("stop-run").disabled = terminal;
+  $("flow-stop-run").disabled = terminal;
   const values = state.runState?.values || {};
   $("run-status").textContent = run.status;
   $("run-status").className = `status ${statusClass(run.status)}`;
@@ -407,6 +433,7 @@ async function loadRun(runId, connect = true) {
     state.run = data.run;
     state.runState = data.state || {};
     state.events = data.events || [];
+    state.messages = data.messages || [];
     state.artifacts = data.artifacts || [];
     state.flowRunId = runId;
     state.artifactRunId = runId;
@@ -464,6 +491,10 @@ function connectRunEvents(runId, afterId = 0) {
 
 function handleRunEvent(event) {
   state.events.push(event);
+  if (event.type === "agent.message" && event.data?.message) {
+    state.messages.push(event.data.message);
+    renderFlowFeed();
+  }
   if (event.agent_id) {
     if (event.type === "agent.started") state.agentStatus[event.agent_id] = "running";
     if (event.type === "agent.completed") state.agentStatus[event.agent_id] = "completed";
@@ -495,11 +526,13 @@ function renderFlow() {
   const tierMeta = Object.fromEntries((registry.tiers || []).map((t) => [Number(t.id), t.name]));
   const nodeHtml = (agent, extraClass = "") => {
     const status = state.agentStatus[agent.id] || (agent.enabled ? "idle" : "disabled");
+    const work = currentWork(agent.id);
     return `
       <div class="flow-node ${extraClass} status-${status}" data-node-id="${escapeHtml(agent.id)}" title="${escapeHtml(agent.mission || "")}">
         <span class="node-icon">${FLOW_ICONS[status] || "○"}</span>
-        <div class="node-title">${escapeHtml(agent.title || agent.id)}</div>
+        <div class="node-title">${escapeHtml(agent.codename || "")} · ${escapeHtml(agent.title || agent.id)}</div>
         <div class="node-sub">${escapeHtml(agent.model || "")} · ${agent.enabled ? status : "on-demand"}</div>
+        ${work ? `<div class="node-work">${escapeHtml(work)}</div>` : ""}
       </div>
     `;
   };
@@ -510,9 +543,14 @@ function renderFlow() {
         <div class="node-title">Dictator</div>
         <div class="node-sub">Human Product Owner</div>
       </div>
+      <div class="flow-node orchestrator status-${state.agentStatus.ceo || "idle"}" data-node-id="ceo">
+        <span class="node-icon">${FLOW_ICONS[state.agentStatus.ceo || "idle"]}</span>
+        <div class="node-title">${escapeHtml(agentById("ceo")?.codename || "A1")} · CEO</div>
+        <div class="node-sub">Company operating system</div>
+      </div>
       <div class="flow-node orchestrator status-${state.agentStatus.chief_orchestrator || "idle"}" data-node-id="chief_orchestrator">
         <span class="node-icon">${FLOW_ICONS[state.agentStatus.chief_orchestrator || "idle"]}</span>
-        <div class="node-title">Chief UI/UX Orchestrator</div>
+        <div class="node-title">${escapeHtml(agentById("chief_orchestrator")?.codename || "A2")} · Chief UI/UX Orchestrator</div>
         <div class="node-sub">Tier 0 · routing · budgets</div>
       </div>
     </div>
@@ -529,7 +567,25 @@ function renderFlow() {
   });
   $("flow-event-count").textContent = String((state.events || []).length);
   renderFlowEvents();
+  renderFlowFeed();
   if (state.activeTab === "flow") requestAnimationFrame(drawFlowEdges);
+}
+
+function renderFlowFeed() {
+  const list = $("flow-feed");
+  if (!list) return;
+  const messages = state.messages || [];
+  $("flow-feed-count").textContent = String(messages.length);
+  list.innerHTML = messages.length ? messages.slice(-80).map((message) => `
+    <div class="feed-item">
+      <div class="who">${escapeHtml(agentLabel(message.from_agent))} → ${escapeHtml(agentLabel(message.to_agent))}</div>
+      <div class="did">${escapeHtml(message.did || message.kind)}</div>
+      ${message.doing ? `<div class="doing">${escapeHtml(message.doing)}</div>` : ""}
+      ${message.needs ? `<div class="doing">Needs: ${escapeHtml(message.needs)}</div>` : ""}
+      <div class="when">${escapeHtml(message.kind)} · ${fmtTime(message.created_at)}</div>
+    </div>
+  `).join("") : `<div class="muted">No structured feed for this historical run. New runs stream short agent handoffs, artifacts, reviews, and escalations here.</div>`;
+  list.scrollTop = list.scrollHeight;
 }
 
 function renderFlowEvents() {
@@ -572,16 +628,24 @@ function drawFlowEdges() {
     };
   };
   const dict = document.querySelector('[data-node-id="dictator"]');
+  const ceo = document.querySelector('[data-node-id="ceo"]');
   const orch = document.querySelector('[data-node-id="chief_orchestrator"]');
   if (!dict || !orch) return;
   const d = box(dict);
+  const c = ceo ? box(ceo) : null;
   const o = box(orch);
   let paths = "";
-  const edge = (a, b, color = "rgba(168,85,247,.22)") => {
+  const edge = (a, b, color = "rgba(168,85,247,.22)", dashed = false) => {
     const dy = Math.max(18, Math.abs(b.y - a.y) / 2);
-    paths += `<path d="M ${a.x} ${a.y} C ${a.x} ${a.y + dy}, ${b.x} ${b.y - dy}, ${b.x} ${b.y}" stroke="${color}" stroke-width="1.4" fill="none"/>`;
+    const dash = dashed ? ' stroke-dasharray="4 5"' : "";
+    paths += `<path d="M ${a.x} ${a.y} C ${a.x} ${a.y + dy}, ${b.x} ${b.y - dy}, ${b.x} ${b.y}" stroke="${color}" stroke-width="1.3" fill="none"${dash}/>`;
   };
-  edge({ x: d.x, y: d.bottom }, { x: o.x, y: o.top }, "rgba(255,255,255,.28)");
+  if (c) {
+    edge({ x: d.x, y: d.bottom }, { x: c.x, y: c.top }, "rgba(255,255,255,.28)");
+    edge({ x: c.x, y: c.bottom }, { x: o.x, y: o.top }, "rgba(255,255,255,.20)");
+  } else {
+    edge({ x: d.x, y: d.bottom }, { x: o.x, y: o.top }, "rgba(255,255,255,.28)");
+  }
   const tiers = [...document.querySelectorAll(".flow-tier")];
   for (const tier of tiers) {
     const rect = tier.getBoundingClientRect();
@@ -595,6 +659,27 @@ function drawFlowEdges() {
     const ax = a.left - base.left + a.width / 2;
     const bx = b.left - base.left + b.width / 2;
     edge({ x: ax, y: a.bottom - base.top }, { x: bx, y: b.top - base.top }, "rgba(168,85,247,.14)");
+  }
+  const signalColors = {
+    handoff: "rgba(168,85,247,.58)",
+    review: "rgba(56,189,248,.55)",
+    artifact: "rgba(34,197,94,.55)",
+    feedback: "rgba(255,59,48,.55)",
+    escalation: "rgba(245,158,11,.65)",
+    broadcast: "rgba(255,255,255,.22)",
+    instruction: "rgba(245,158,11,.45)",
+  };
+  const nodeFor = (agentId) => document.querySelector(`[data-node-id="${CSS.escape(agentId || "")}"]`);
+  for (const message of (state.messages || []).slice(-32)) {
+    const from = nodeFor(message.from_agent);
+    const to = nodeFor(message.to_agent);
+    if (!from || !to || from === to) continue;
+    const a = box(from);
+    const b = box(to);
+    const color = signalColors[message.kind] || signalColors.broadcast;
+    const dy = Math.max(24, Math.abs(b.y - a.y) / 2);
+    const bend = (a.x < b.x ? 1 : -1) * 24;
+    paths += `<path d="M ${a.x} ${a.y} C ${a.x + bend} ${a.y + dy}, ${b.x + bend} ${b.y - dy}, ${b.x} ${b.y}" stroke="${color}" stroke-width="1" fill="none" stroke-dasharray="2 4" opacity=".9"/>`;
   }
   svg.innerHTML = `<defs><marker id="flow-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="rgba(168,85,247,.38)"/></marker></defs>${paths}`;
 }
@@ -625,7 +710,7 @@ function openAgentDetail(agentId) {
     <h3 style="font-size:12px;margin-top:12px">Recent agent events (${events.length})</h3>
     <div class="timeline tall">${events.slice(-20).map((e) => `<div class="event"><span class="dot"></span><div class="body"><div class="msg">${escapeHtml(e.message || e.type)}</div><div class="meta">${escapeHtml(e.type)} · ${fmtTime(e.created_at)}</div></div></div>`).join("") || `<div class="muted">No events yet.</div>`}</div>
   `;
-  openModal(agent.title || agent.id, agent.real_world_equivalent || "Agent detail", body, `<button class="btn ghost" data-close-modal>Close</button>`, (modal) => {
+  openModal(`${agent.codename || ""} · ${agent.title || agent.id}`, agent.real_world_equivalent || "Agent detail", body, `<button class="btn ghost" data-close-modal>Close</button>`, (modal) => {
     modal.querySelectorAll("[data-agent-artifact]").forEach((el) => {
       el.addEventListener("click", () => { closeModal(); openArtifact(state.runId, el.dataset.agentArtifact); });
     });
@@ -642,6 +727,10 @@ function approvalCard(approval, compact = false) {
         <span class="badge ${statusClass(approval.status)}">${escapeHtml(approval.gate)}</span>
         <span>${fmtTime(approval.created_at)}</span>
         ${approval.run_id ? `<span>${escapeHtml(short(approval.run_id, 28))}</span>` : ""}
+      </div>
+      <div class="meta">
+        <span>From: <b>${escapeHtml(approval.from_codename ? `${approval.from_codename} · ${agentById(approval.from_agent)?.title || approval.from_agent}` : agentLabel(approval.from_agent))}</b></span>
+        ${approval.due_at ? `<span>Due: ${fmtTime(approval.due_at)}</span>` : ""}
       </div>
       <div class="message">${escapeHtml(short(approval.message || "", compact ? 180 : 500))}</div>
       ${options && !compact ? `<div class="meta" style="margin-top:7px">${options}</div>` : ""}
@@ -679,6 +768,7 @@ function renderApprovals() {
       <div class="meta">
         <span class="badge ${statusClass(a.status)}">${escapeHtml(a.status)}</span>
         <span>${escapeHtml(a.gate)}</span>
+        <span>From: ${escapeHtml(a.from_codename || agentLabel(a.from_agent))}</span>
         <span>${fmtTime(a.decided_at || a.created_at)}</span>
         ${a.decision?.notes ? `<span>${escapeHtml(short(a.decision.notes, 80))}</span>` : ""}
       </div>
@@ -732,7 +822,8 @@ function renderTarget() {
   const path = state.settings?.target_ui_dir || manifest.source_path || "—";
   const status = manifest.status || "unknown";
   $("target-path").textContent = path;
-  $("target-status").innerHTML = `<span class="badge ${statusClass(status)}">${escapeHtml(status)}</span> <span class="muted">${images.length} image(s) · ${escapeHtml(manifest.precedence || "tiered")} precedence</span>`;
+  const currentCount = state.currentManifest?.images?.length || 0;
+  $("target-status").innerHTML = `<span class="badge ${statusClass(status)}">${escapeHtml(status)}</span> <span class="muted">${images.length} target image(s) · ${currentCount} current-UI baseline(s) · ${escapeHtml(manifest.precedence || "tiered")} precedence</span>`;
   $("target-mini").innerHTML = `<span class="badge ${statusClass(status)}">${escapeHtml(status)}</span> <span class="muted">${images.length} image(s)</span>`;
   const thumbs = images.slice(0, 3).map((image) => `
     <div class="thumb"><img src="/api/target-ui/image?path=${encodeURIComponent(image.file)}" alt="${escapeHtml(image.screen || "target")}" onerror="this.style.display='none'" /><span>${escapeHtml(image.screen || "unknown")}</span></div>
@@ -761,6 +852,21 @@ function renderTarget() {
       openModal("Target_ui reference", file, `<img src="/api/target-ui/image?path=${encodeURIComponent(file)}" style="max-width:100%;border-radius:12px" />`);
     });
   });
+}
+
+async function scanCurrent() {
+  const path = state.settings?.current_ui_dir;
+  if (!path) { toast("Set a Current UI directory first.", "error"); return; }
+  try {
+    state.currentManifest = await api("/api/current-ui/scan", {
+      method: "POST",
+      body: JSON.stringify({ path, analyze: false }),
+    });
+    toast(`Current UI scanned: ${state.currentManifest.images?.length || 0} image(s).`);
+    renderSettings();
+  } catch (error) {
+    toast(`Current UI error: ${error.message}`, "error");
+  }
 }
 
 async function scanTarget(analyze = false) {
@@ -1160,6 +1266,20 @@ function renderSettings() {
   if (!s) return;
   $("settings-project-dir").textContent = s.project_dir || "—";
   $("settings-target-dir").textContent = s.target_ui_dir || "—";
+  $("settings-current-dir").textContent = s.current_ui_dir || "—";
+  const validation = s.project_validation || state.health?.project_validation;
+  if (validation) {
+    $("settings-project-validation").innerHTML = `
+      <span class="${validation.valid ? "ok" : "bad"}">${validation.valid ? "✓ Android project" : "✕ Not a valid Android project"}</span>
+      <span class="${validation.has_compose ? "ok" : "warn"}">${validation.has_compose ? "✓ Compose" : "! No Compose"}</span>
+      <span class="${validation.has_design_tokens ? "ok" : "warn"}">${validation.has_design_tokens ? "✓ Tokens" : "! No tokens"}</span>
+      <span class="${validation.has_target_ui ? "ok" : "warn"}">${validation.has_target_ui ? "✓ Target_ui" : "! No Target_ui"}</span>
+      <span class="${validation.has_current_ui ? "ok" : "warn"}">${validation.has_current_ui ? "✓ Current UI" : "! No current UI"}</span>
+      ${validation.warnings?.length ? `<span class="warn">${escapeHtml(validation.warnings.join(" · "))}</span>` : ""}
+    `;
+  } else {
+    $("settings-project-validation").innerHTML = "";
+  }
   $("settings-budget").textContent = fmtNumber(s.monthly_token_budget);
   $("settings-autonomy").value = s.autonomy_level || "L2";
   fillModelSelect($("settings-model"), s.model);
@@ -1198,12 +1318,13 @@ function openBudgetEditor() {
 }
 
 async function openFolderBrowser(kind) {
-  const key = kind === "project" ? "project_dir" : "target_ui_dir";
-  const start = state.settings?.[key] || (kind === "project" ? state.health?.project_dir : state.health?.target_ui_dir) || "";
+  const key = kind === "project" ? "project_dir" : (kind === "current" ? "current_ui_dir" : "target_ui_dir");
+  const start = state.settings?.[key] || (kind === "project" ? state.health?.project_dir : state.health?.[`${kind}_ui_dir`]) || "";
   await showFolder(start, kind);
 }
 
 async function showFolder(path, kind) {
+  const key = kind === "project" ? "project_dir" : (kind === "current" ? "current_ui_dir" : "target_ui_dir");
   try {
     const data = await api(`/api/fs/list?path=${encodeURIComponent(path || "")}`);
     const rows = (data.directories || []).map((dir) => `
@@ -1216,11 +1337,13 @@ async function showFolder(path, kind) {
       <div class="folder-path">${escapeHtml(data.path)}</div>
       <div class="folder-list">${rows || `<div class="muted">No subdirectories.</div>`}</div>
     `;
+    const title = kind === "project" ? "Select project directory" : (kind === "current" ? "Select Current UI directory" : "Select Target_ui directory");
     openModal(
-      kind === "project" ? "Select project directory" : "Select Target_ui directory",
+      title,
       "Only directories are shown. Hidden folders are omitted.",
       body,
       `<button class="btn ghost" data-close-modal>Cancel</button>
+       ${kind !== "project" ? `<button class="btn ghost" id="folder-search">Search recursively</button>` : ""}
        ${data.parent ? `<button class="btn ghost" id="folder-up">Up</button>` : ""}
        <button class="btn primary" id="folder-select">Select this folder</button>`,
       (modal) => {
@@ -1228,15 +1351,45 @@ async function showFolder(path, kind) {
           el.addEventListener("click", () => showFolder(el.dataset.folder, kind));
         });
         modal.querySelector("#folder-up")?.addEventListener("click", () => showFolder(data.parent, kind));
+        modal.querySelector("#folder-search")?.addEventListener("click", () => searchFolders(data.path, kind));
         modal.querySelector("#folder-select")?.addEventListener("click", async () => {
           await saveSettings({ [key]: data.path });
           closeModal();
           if (kind === "target") await scanTarget(false);
+          if (kind === "current") await scanCurrent(false);
         });
       },
     );
   } catch (error) {
     toast(`Folder browse error: ${error.message}`, "error");
+  }
+}
+
+async function searchFolders(root, kind) {
+  const patterns = kind === "current"
+    ? "current_ui,screenshots_of_current_ui,current_screens"
+    : "target_ui,target-ui,reference_ui";
+  try {
+    const data = await api(`/api/fs/search?root=${encodeURIComponent(root)}&patterns=${encodeURIComponent(patterns)}`);
+    const rows = (data.results || []).map((item) => `
+      <div class="folder-row" data-search-folder="${escapeHtml(item.path)}">
+        <span class="folder-icon">◉</span>
+        <span>${escapeHtml(item.path)} <span class="muted">(${item.image_count} images)</span></span>
+      </div>
+    `).join("");
+    openModal(
+      "Recursive folder search",
+      `Found ${data.results?.length || 0} matching folder(s) under ${data.root}`,
+      `<div class="folder-list">${rows || `<div class="muted">No matching folders found.</div>`}</div>`,
+      `<button class="btn ghost" data-close-modal>Close</button>`,
+      (modal) => {
+        modal.querySelectorAll("[data-search-folder]").forEach((el) => {
+          el.addEventListener("click", () => showFolder(el.dataset.searchFolder, kind));
+        });
+      },
+    );
+  } catch (error) {
+    toast(`Folder search error: ${error.message}`, "error");
   }
 }
 
@@ -1269,6 +1422,8 @@ $("tabs").addEventListener("click", (event) => {
   if (tab) switchTab(tab.dataset.tab);
 });
 $("open-flow").addEventListener("click", () => switchTab("flow"));
+$("stop-run").addEventListener("click", () => stopRun(state.runId));
+$("flow-stop-run").addEventListener("click", () => stopRun(state.flowRunId || state.runId));
 $("open-evolution").addEventListener("click", () => switchTab("evolution"));
 $("flow-run-select").addEventListener("change", (event) => { loadRun(event.target.value, true); });
 $("flow-refresh").addEventListener("click", () => { if (state.flowRunId) loadRun(state.flowRunId, true); });
@@ -1292,13 +1447,30 @@ $("screenshot-input").addEventListener("change", async (event) => {
 $("run-btn").addEventListener("click", startRun);
 $("overview-scan-target").addEventListener("click", () => { switchTab("target"); scanTarget(false); });
 $("scan-target").addEventListener("click", () => scanTarget(false));
+$("scan-current").addEventListener("click", scanCurrent);
 $("analyze-target").addEventListener("click", () => scanTarget(true));
 $("browse-target").addEventListener("click", () => openFolderBrowser("target"));
 $("browse-target-settings").addEventListener("click", () => openFolderBrowser("target"));
 $("browse-project").addEventListener("click", () => openFolderBrowser("project"));
+$("browse-current").addEventListener("click", () => openFolderBrowser("current"));
 $("budget-pill").addEventListener("click", openBudgetEditor);
 $("edit-budget-settings").addEventListener("click", openBudgetEditor);
 $("settings-budget").addEventListener("click", openBudgetEditor);
+$("test-model").addEventListener("click", async () => {
+  const model = $("model-select").value;
+  if (!model) { toast("Select a model first.", "error"); return; }
+  openModal("Model test", model, `<div class="muted">Calling ${escapeHtml(model)} with “Hey which model you are?”…</div>`);
+  try {
+    const result = await api("/api/models/test", { method: "POST", body: JSON.stringify({ model }) });
+    openModal(
+      result.ok ? "Model test: OK" : "Model test: failed",
+      model,
+      `<pre>${escapeHtml(result.text || result.error || "No response")}</pre><div class="meta">${result.ok ? `latency ${result.latency_ms}ms · session ${escapeHtml(result.session_id || "—")}` : escapeHtml(result.stderr || "")}</div>`,
+    );
+  } catch (error) {
+    openModal("Model test: failed", model, `<div class="muted">${escapeHtml(error.message)}</div>`);
+  }
+});
 $("refresh-models").addEventListener("click", async () => { await loadModels(true); toast("OpenCode model list refreshed."); });
 $("model-select").addEventListener("change", async (event) => { await saveSettings({ model: event.target.value }); });
 $("settings-model").addEventListener("change", async (event) => { await saveSettings({ model: event.target.value }); });
@@ -1317,6 +1489,13 @@ $("evolution-start").addEventListener("click", startEvolution);
 $("evolution-stop").addEventListener("click", stopEvolution);
 $("evolution-select").addEventListener("change", (event) => { if (event.target.value) openEvolution(event.target.value); });
 window.addEventListener("resize", () => { if (state.activeTab === "flow") drawFlowEdges(); });
+document.addEventListener("scroll", (event) => {
+  const el = event.target;
+  if (!(el instanceof HTMLElement)) return;
+  el.classList.add("is-scrolling");
+  clearTimeout(el._scrollTimer);
+  el._scrollTimer = setTimeout(() => el.classList.remove("is-scrolling"), 800);
+}, true);
 window.addEventListener("hashchange", () => {
   const name = location.hash.replace("#", "");
   if (name) switchTab(name);
@@ -1343,6 +1522,18 @@ $("purge-mock").addEventListener("click", () => {
   );
 });
 document.addEventListener("DOMContentLoaded", init);
+
+async function stopRun(runId) {
+  if (!runId) return;
+  try {
+    await api(`/api/runs/${encodeURIComponent(runId)}/stop`, { method: "POST" });
+    toast(`Run stopped: ${runId}`);
+    await loadRun(runId, false);
+    await poll();
+  } catch (error) {
+    toast(`Stop run error: ${error.message}`, "error");
+  }
+}
 
 async function startRun() {
   const prompt = $("decree").value.trim();

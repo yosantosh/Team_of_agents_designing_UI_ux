@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -50,10 +51,28 @@ CREATE TABLE IF NOT EXISTS approvals (
   options_json TEXT,
   status TEXT NOT NULL DEFAULT 'pending',
   decision_json TEXT,
+  from_agent TEXT,
+  from_codename TEXT,
+  sla_minutes INTEGER,
+  due_at TEXT,
   created_at TEXT NOT NULL,
   decided_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status, created_at);
+CREATE TABLE IF NOT EXISTS agent_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL,
+  from_agent TEXT,
+  to_agent TEXT,
+  kind TEXT,
+  did TEXT,
+  doing TEXT,
+  needs TEXT,
+  artifact TEXT,
+  confidence REAL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_messages_run ON agent_messages(run_id, id);
 CREATE TABLE IF NOT EXISTS token_usage (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   run_id TEXT,
@@ -91,6 +110,16 @@ class Storage:
         self._conn.row_factory = sqlite3.Row
         with self._lock:
             self._conn.executescript(SCHEMA)
+            # Lightweight migrations for existing local databases.
+            columns = {row[1] for row in self._conn.execute("PRAGMA table_info(approvals)").fetchall()}
+            for column, definition in {
+                "from_agent": "TEXT",
+                "from_codename": "TEXT",
+                "sla_minutes": "INTEGER",
+                "due_at": "TEXT",
+            }.items():
+                if column not in columns:
+                    self._conn.execute(f"ALTER TABLE approvals ADD COLUMN {column} {definition}")
             self._conn.commit()
 
     def close(self) -> None:
@@ -246,12 +275,31 @@ class Storage:
         title: str,
         message: str = "",
         options: list[dict[str, Any]] | None = None,
+        from_agent: str | None = None,
+        from_codename: str | None = None,
+        sla_minutes: int | None = None,
     ) -> dict[str, Any]:
         approval_id = new_id("appr")
         now = utcnow()
+        due_at = None
+        if sla_minutes:
+            due_at = (datetime.now(timezone.utc) + timedelta(minutes=int(sla_minutes))).isoformat()
         self._execute(
-            "INSERT INTO approvals(approval_id,run_id,gate,title,message,options_json,status,created_at) VALUES(?,?,?,?,?,?,?,?)",
-            (approval_id, run_id, gate, title, message, json.dumps(options or [], default=str), "pending", now),
+            "INSERT INTO approvals(approval_id,run_id,gate,title,message,options_json,status,from_agent,from_codename,sla_minutes,due_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                approval_id,
+                run_id,
+                gate,
+                title,
+                message,
+                json.dumps(options or [], default=str),
+                "pending",
+                from_agent,
+                from_codename,
+                sla_minutes,
+                due_at,
+                now,
+            ),
         )
         return self.get_approval(approval_id) or {}
 
@@ -311,6 +359,44 @@ class Storage:
         if not rows:
             return None
         return self.get_approval(rows[0]["approval_id"])
+
+    # ---------------------------------------------------------- agent feed
+    def add_agent_message(
+        self,
+        run_id: str,
+        from_agent: str | None,
+        to_agent: str | None,
+        kind: str,
+        did: str = "",
+        doing: str = "",
+        needs: str = "",
+        artifact: str | None = None,
+        confidence: float | None = None,
+    ) -> dict[str, Any]:
+        now = utcnow()
+        cur = self._execute(
+            "INSERT INTO agent_messages(run_id,from_agent,to_agent,kind,did,doing,needs,artifact,confidence,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (run_id, from_agent, to_agent, kind, did, doing, needs, artifact, confidence, now),
+        )
+        return {
+            "id": cur.lastrowid,
+            "run_id": run_id,
+            "from_agent": from_agent,
+            "to_agent": to_agent,
+            "kind": kind,
+            "did": did,
+            "doing": doing,
+            "needs": needs,
+            "artifact": artifact,
+            "confidence": confidence,
+            "created_at": now,
+        }
+
+    def list_agent_messages(self, run_id: str, after_id: int = 0, limit: int = 500) -> list[dict[str, Any]]:
+        return self._query(
+            "SELECT * FROM agent_messages WHERE run_id=? AND id>? ORDER BY id ASC LIMIT ?",
+            (run_id, after_id, limit),
+        )
 
     # ---------------------------------------------------------------- budget
     def record_usage(
@@ -376,6 +462,7 @@ class Storage:
             "events": 0,
             "artifacts": 0,
             "approvals": 0,
+            "agent_messages": 0,
             "token_rows": 0,
         }
         if mock_ids:
@@ -383,11 +470,13 @@ class Storage:
             counts["events"] = len(self._query(f"SELECT id FROM events WHERE run_id IN ({placeholders})", tuple(mock_ids)))
             counts["artifacts"] = len(self._query(f"SELECT artifact_id FROM artifacts WHERE run_id IN ({placeholders})", tuple(mock_ids)))
             counts["approvals"] = len(self._query(f"SELECT approval_id FROM approvals WHERE run_id IN ({placeholders})", tuple(mock_ids)))
+            counts["agent_messages"] = len(self._query(f"SELECT id FROM agent_messages WHERE run_id IN ({placeholders})", tuple(mock_ids)))
             counts["token_rows"] = len(self._query(f"SELECT id FROM token_usage WHERE run_id IN ({placeholders})", tuple(mock_ids)))
             counts["runs"] = len(mock_ids)
             self._execute(f"DELETE FROM events WHERE run_id IN ({placeholders})", tuple(mock_ids))
             self._execute(f"DELETE FROM artifacts WHERE run_id IN ({placeholders})", tuple(mock_ids))
             self._execute(f"DELETE FROM approvals WHERE run_id IN ({placeholders})", tuple(mock_ids))
+            self._execute(f"DELETE FROM agent_messages WHERE run_id IN ({placeholders})", tuple(mock_ids))
             self._execute(f"DELETE FROM token_usage WHERE run_id IN ({placeholders})", tuple(mock_ids))
             self._execute(f"DELETE FROM runs WHERE run_id IN ({placeholders})", tuple(mock_ids))
         # Legacy mock provider rows may have survived without a runs row.

@@ -16,6 +16,8 @@ def settings(tmp_path: Path) -> Settings:
     base.runtime_dir = tmp_path
     base.artifacts_dir = tmp_path / "artifacts"
     base.target_ui_path = PROJECT_ROOT / "target_ui_example"
+    base.current_ui_path = PROJECT_ROOT / "current_ui_example"
+    base.project_dir = PROJECT_ROOT
     base.model_backend = "mock"
     base.auto_approve = True
     base.durable_checkpoints = False

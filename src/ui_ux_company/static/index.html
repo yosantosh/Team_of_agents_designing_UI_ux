@@ -15,21 +15,23 @@
         <p>Dictator Control Room · Native Android social app</p>
       </div>
     </div>
-    <nav class="tabs" id="tabs">
-      <button class="tab active" data-tab="overview">Overview</button>
-      <button class="tab" data-tab="flow">Live Flow</button>
-      <button class="tab" data-tab="approvals">Approvals <span class="count" id="approval-badge">0</span></button>
-      <button class="tab" data-tab="artifacts">Artifacts</button>
-      <button class="tab" data-tab="target">Target_ui</button>
-      <button class="tab" data-tab="evolution">Evolution</button>
-      <button class="tab" data-tab="settings">Settings</button>
-    </nav>
     <div class="top-actions">
       <button class="pill clickable" id="budget-pill" title="Click to edit monthly token budget">Budget —</button>
       <select id="model-select" class="model-select" title="OpenCode model for new runs"></select>
+      <button class="btn ghost small" id="test-model" title="Ask the selected model who it is">Test</button>
       <button class="btn primary" id="evolve-btn">✦ Evolve / Improve</button>
     </div>
   </header>
+
+  <aside class="rail" id="tabs">
+    <button class="tab active" data-tab="overview" title="Overview"><span class="rail-icon">◈</span><span class="rail-label">Overview</span></button>
+    <button class="tab" data-tab="flow" title="Live Flow"><span class="rail-icon">⌘</span><span class="rail-label">Live Flow</span></button>
+    <button class="tab" data-tab="approvals" title="Approvals"><span class="rail-icon">✓</span><span class="rail-label">Approvals</span><span class="count" id="approval-badge">0</span></button>
+    <button class="tab" data-tab="artifacts" title="Artifacts"><span class="rail-icon">▤</span><span class="rail-label">Artifacts</span></button>
+    <button class="tab" data-tab="target" title="Target_ui"><span class="rail-icon">◉</span><span class="rail-label">Target_ui</span></button>
+    <button class="tab" data-tab="evolution" title="Evolution"><span class="rail-icon">✦</span><span class="rail-label">Evolution</span></button>
+    <button class="tab" data-tab="settings" title="Settings"><span class="rail-icon">⚙</span><span class="rail-label">Settings</span></button>
+  </aside>
 
   <main class="main">
     <!-- OVERVIEW -->
@@ -45,9 +47,12 @@
             <div class="controls">
               <label>Mode
                 <select id="mode">
-                  <option value="design">Design only</option>
-                  <option value="implement">Implement plan</option>
-                  <option value="full">Full + QA</option>
+                  <option value="explore">Explore — research & directions</option>
+                  <option value="design" selected>Design — package + critique</option>
+                  <option value="build">Build — design + implementation plan</option>
+                  <option value="ship">Ship — design + build + QA + release</option>
+                  <option value="audit">Audit — review current UI</option>
+                  <option value="fix">Fix — fast micro-fix</option>
                 </select>
               </label>
               <label>Model
@@ -82,6 +87,7 @@
               <div class="row">
                 <span class="status" id="run-status">idle</span>
                 <button class="btn ghost small" id="open-flow">Open full flow ↗</button>
+                <button class="btn danger small" id="stop-run" disabled>■ Stop</button>
               </div>
             </div>
             <div class="run-meta" id="run-meta">No run selected. Issue a decree to begin.</div>
@@ -144,6 +150,7 @@
         <div class="row">
           <select id="flow-run-select" class="wide-select"></select>
           <button class="btn ghost small" id="flow-refresh">Refresh</button>
+          <button class="btn danger small" id="flow-stop-run" disabled>■ Stop</button>
         </div>
       </div>
       <div class="flow-layout">
@@ -161,9 +168,15 @@
             <div id="flow-nodes" class="flow-nodes"></div>
           </div>
         </div>
-        <div class="card flow-events-card">
-          <div class="card-head"><h2>Agent events</h2><span class="tag" id="flow-event-count">0</span></div>
-          <div id="flow-event-list" class="timeline scroll tall"></div>
+        <div class="flow-side">
+          <div class="card flow-events-card">
+            <div class="card-head"><h2>Company feed</h2><span class="tag" id="flow-feed-count">0</span></div>
+            <div id="flow-feed" class="feed scroll tall"></div>
+          </div>
+          <div class="card flow-events-card">
+            <div class="card-head"><h2>Agent events</h2><span class="tag" id="flow-event-count">0</span></div>
+            <div id="flow-event-list" class="timeline scroll tall"></div>
+          </div>
         </div>
       </div>
     </section>
@@ -206,6 +219,7 @@
           <h2>Target_ui reference</h2>
           <div class="row">
             <button class="btn ghost small" id="browse-target">Browse folder</button>
+            <button class="btn ghost small" id="scan-current">Scan current UI</button>
             <button class="btn ghost small" id="scan-target">Scan</button>
             <button class="btn primary small" id="analyze-target">Scan + analyze</button>
           </div>
@@ -254,12 +268,18 @@
         <div class="card">
           <div class="card-head"><h2>Project directory</h2><button class="btn ghost small" id="browse-project">Browse</button></div>
           <div class="path-display" id="settings-project-dir">—</div>
+          <div id="settings-project-validation" class="validation"></div>
           <p class="hint">The Android project the implementation agents will inspect. Used in every new run's context.</p>
         </div>
         <div class="card">
           <div class="card-head"><h2>Target_ui directory</h2><button class="btn ghost small" id="browse-target-settings">Browse</button></div>
           <div class="path-display" id="settings-target-dir">—</div>
           <p class="hint">Reference images folder. If empty, the company uses the research-led no-target path.</p>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Current UI directory</h2><button class="btn ghost small" id="browse-current">Browse</button></div>
+          <div class="path-display" id="settings-current-dir">—</div>
+          <p class="hint">Current screenshots used as the audit and visual-regression baseline. If empty, QA is instructed to capture them.</p>
         </div>
         <div class="card">
           <div class="card-head"><h2>OpenCode model</h2><div class="row"><button class="btn ghost small" id="refresh-models">Refresh</button></div></div>

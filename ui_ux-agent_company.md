@@ -226,6 +226,63 @@ Promotion from L2 to L3 requires: at least 20 completed runs, zero critical esca
 
 ---
 
+## 4.5 Company Brain, hierarchy, and the common feed
+
+The Chief does not manage from a single prompt. It receives a compact **Company Brain**:
+
+- `company_brief.json`: codenames, titles, tiers, reporting lines, missions, inputs/outputs, gates, playbooks.
+- `org_brief()`: queryable org graph; who owns what, who reports to whom.
+- `routing_plan`: the Chief's interpretation, assumptions, chosen playbook, selected agents, DAG, gates, risks, and budget. It is written as an artifact and visible in the dashboard.
+- `company feed`: short structured status updates from every agent. All agents can read it; only the assigned agent acts.
+
+### Hierarchy
+
+```
+CEO agent (A1)
+  └── Chief UI/UX Orchestrator (A2)
+        ├── Discovery & Standards Lead (A3) → Tier 1 specialists
+        ├── Design Lead (A4) → Tier 2 specialists
+        ├── Engineering Lead (A5) → Tier 3 specialists
+        ├── Quality & Release Lead (A6) → Tier 4 specialists
+        └── Meta, Memory & Evolution Lead (A7) → Tier 5 specialists
+```
+
+- At **L0–L2**, the human is CEO + Dictator; the CEO agent advises and maintains the operating system.
+- At **L3**, the CEO agent shares operating authority; major decisions escalate to the human.
+- At **L4**, the CEO agent runs the company; the human is Dictator only (veto, major escalations, release authority as configured).
+- Lower-level agents may collaborate with peers in their pod and read the feed, but decisions and escalations go up their reporting line. A **critical bypass** is allowed with a reason and an audit notification.
+- The pyramid improves accountability and delivery consistency. It does not replace independent critique, real user evidence, Target_ui/current-UI fidelity, or evals.
+
+### Feed contract
+
+```json
+{
+  "run_id": "run_...",
+  "from_agent": "A22",
+  "to_agent": "A16",
+  "kind": "handoff | review | artifact | feedback | escalation | instruction | broadcast",
+  "did": "Completed independent critique",
+  "doing": "Sending rework instructions",
+  "needs": "Resolve the offline-state contradiction",
+  "artifact": "design_critique.json",
+  "confidence": 0.82,
+  "created_at": "..."
+}
+```
+
+The dashboard draws thin colored lines from these messages:
+
+- purple: handoff
+- blue: review
+- green: artifact
+- red: feedback/rework
+- amber: escalation/instruction
+- grey: broadcast
+
+This is transparency without a free-form chat room. The feed is not a command channel; task contracts remain the command channel.
+
+---
+
 ## 5. Org chart and roster
 
 ### 5.1 Tiers
@@ -259,7 +316,13 @@ The registry is the authoritative list. These are the enabled MVP agents:
 
 | ID | Tier | Real-world equivalent | Mission | Primary gates |
 |---|---|---|---|---|
-| `chief_orchestrator` | 0 | VP Product Design & Release Director | Intake, DAG, routing, budgets, escalation, evaluation. Does not author. | manager evaluation |
+| `ceo` (`A1`) | 0 | CEO / Head of Product | Company operating system, priorities, constraints, cross-tier conflicts; escalates major decisions to the human Dictator. | CEO review |
+| `chief_orchestrator` (`A2`) | 0 | VP Product Design & Release Director | Intake, routing through leads, budgets, escalation, evaluation. Does not author. | manager evaluation |
+| `discovery_lead` (`A3`) | 1 | Director of Product Discovery | Tier 1 management, upstream criteria, evidence quality. | tier 1 review |
+| `design_lead` (`A4`) | 2 | Director of Product Design | Tier 2 management, design contract, target fidelity, critique. | tier 2 review |
+| `engineering_lead` (`A5`) | 3 | Director of Android Design Engineering | Tier 3 management, Compose, parity, merge safety. | tier 3 review |
+| `quality_lead` (`A6`) | 4 | Director of Quality & Release | Tier 4 management, evidence, release blockers. | tier 4 review |
+| `meta_lead` (`A7`) | 5 | Director of Design Ops & AI Quality | Tier 5 management, memory, evals, evolution. | tier 5 review |
 | `product_analyst` | 1 | Staff Product Manager | Problem, users, metrics, scope, risk, acceptance criteria. | product brief review |
 | `ux_researcher` | 1 | Senior Staff UX Researcher | Evidence, competitor patterns, friction, unknowns. | research review |
 | `android_platform_designer` | 1 | Android Platform UX Specialist | Predictive back, insets, IME, adaptive, foldables, permissions. | platform review |
@@ -349,6 +412,17 @@ flowchart TD
 14. **Learn** — memory entry, ADR, design debt, follow-ups, rework taxonomy.
 15. **Monitor & evolve** — telemetry, incidents, metrics; the evolution graph proposes improvements.
 
+### 6.1.1 Modes
+
+| Mode | What it does | Implementation path |
+|---|---|---|
+| **Explore** | Research, evidence, and 2–3 design directions; no implementation. | design-only |
+| **Design** | Full design package + critique + Dictator gate. | design-only |
+| **Build** | Design + surgical implementation plan/patch. | implement |
+| **Ship** | Design + build + QA + release candidate. | full |
+| **Audit** | Critique/QA the current UI; no new visual direction unless requested. | design-only + current-UI baseline |
+| **Fix** | Fast micro-fix with visual diff and focused QA. | design-only fast lane |
+
 ### 6.2 Fast lanes
 
 - **Micro-fix lane:** lint + visual diff + one designer + one implementer + QA. Still gated, shorter DAG.
@@ -437,7 +511,20 @@ target_ui:
 }
 ```
 
-### 7.5 Legal and ethical policy
+### 7.5 Current UI baseline
+
+`current_ui` is separate from Target_ui:
+
+- Target_ui is the visual north star for the new design.
+- Current UI is the audit and visual-regression baseline.
+- Both folders can be browsed manually or found with recursive search patterns:
+  - target: `target_ui`, `target-ui`, `reference_ui`
+  - current: `current_ui`, `screenshots_of_current_ui`, `current_screens`
+- If Target_ui is empty, the Target_ui Analyst posts an instruction to the Design Lead and the company proceeds research-led.
+- If Current UI is empty, Visual QA posts an instruction to the Quality Lead; audit and regression evidence are limited until screenshots are captured.
+- Project validation checks for Gradle, AndroidManifest, Compose, design tokens, and both UI folders. Invalid projects are warned, not silently accepted.
+
+### 7.6 Legal and ethical policy
 
 - Competitor and third-party images are **reference only**.
 - Extract structure, hierarchy, and interaction patterns. Do not copy logos, proprietary illustrations, exact color systems, fonts, or copy.
@@ -569,7 +656,8 @@ Artifacts are written to `artifacts/runs/<run_id>/` and indexed in SQLite. The g
 
 | Node | Agent(s) | Output |
 |---|---|---|
-| `intake` | product_analyst | `product_brief.json` |
+| `intake` | product_analyst | `product_brief.json`, `company_brief.json` |
+| `ceo_review` | ceo | `ceo_directive.json`, `routing_plan.json` |
 | `target_ui` | target_ui_analyst | `target_manifest.json` |
 | `discovery` | ux_researcher + android_platform_designer (parallel) | `research_findings.json` |
 | `synthesis` | ia_interaction_designer | `user_flows.json` |
@@ -669,22 +757,25 @@ A dependency-free SPA served by FastAPI:
 - `src/ui_ux_company/static/styles.css`
 - `src/ui_ux_company/static/app.js`
 
-It is organized into tabs:
+The SPA uses a narrow left icon rail (labels on hover) and tabs:
 
 - **Overview** — decree composer, recent runs, live timeline, compact org summary, quick approvals, token budget, quick artifacts, Target_ui mini-preview, evolution quick list.
-- **Live Flow** — full hierarchical agent graph with idle/running/completed/error/waiting icons, live SSE events, and click-through agent detail (status, last event, artifacts, token usage).
-- **Approvals** — pending decisions and history, with Approve / Reject / Dictate.
+- **Live Flow** — full-page hierarchical graph with CEO/Chief/tier leads/specialists, codenames A1–A36, idle/running/completed/error/waiting icons, current work labels, thin colored signal lines, company feed, live SSE events, and click-through agent detail.
+- **Approvals** — source agent/codename, due time, approve/reject/dictate, decision history.
 - **Artifacts** — run selector, artifact list, JSON/text/image preview, and real screenshot upload for QA evidence.
-- **Target_ui** — folder picker, scan, scan + vision analysis, image grid, confidence, conflicts.
+- **Target_ui** — target + current-UI browse, recursive folder search, scan, scan + vision analysis, image grid, confidence, conflicts.
 - **Evolution** — start/stop audit, live Observe → Diagnose → Evaluate → Approve → Apply cards, agent output modals, proposal detail, Approve / Reject / Dictate.
-- **Settings** — project directory browse, Target_ui directory browse, OpenCode model selector (all `opencode models`), editable monthly token budget, autonomy level, runtime info, and mock/demo data purge.
+- **Settings** — project directory browse + Gradle/Manifest/Compose/token validation, Current UI directory, Target_ui directory, OpenCode model selector (all `opencode models`), model test, editable monthly token budget, autonomy level, runtime info, and mock/demo data purge.
 
 Production defaults:
 
 - No mock/demo controls in the dashboard. The API keeps a test-only mock backend for automated tests; the production UI always uses OpenCode.
 - The selected model is persisted in `.runtime/settings.json` and applied to new runs and evolution audits.
 - The budget is persisted to `org/budget_policy.yaml` and `.runtime/settings.json`.
-- Project and Target_ui directories are persisted and injected into new-run context.
+- Project/Current UI/Target_ui directories are persisted and injected into new-run context.
+- Run stop cancels the graph task and the OpenCode subprocess; pending approvals are marked stopped.
+- Approvals carry `from_agent`, `from_codename`, `sla_minutes`, and `due_at`.
+- The company feed is stored in `agent_messages` and streamed as `agent.message` events.
 
 ### 11.2 Production upgrade path
 
@@ -698,13 +789,21 @@ Replace the SPA with Next.js + React Flow when multi-user/RBAC is needed. Keep t
 - `GET /api/target-ui`
 - `POST /api/target-ui/scan`
 - `GET /api/target-ui/image?path=...`
+- `GET /api/current-ui`
+- `POST /api/current-ui/scan`
+- `GET /api/current-ui/image?path=...`
+- `GET /api/fs/search?root=...&patterns=...`
+- `GET /api/project/validate?path=...`
+- `POST /api/models/test`
 - `POST /api/runs`
 - `GET /api/runs`
 - `GET /api/runs/{run_id}`
+- `GET /api/runs/{run_id}/messages`
 - `GET /api/runs/{run_id}/events` (SSE)
 - `GET /api/runs/{run_id}/artifacts`
 - `GET /api/artifacts/{run_id}/{name}`
 - `POST /api/runs/{run_id}/screenshots`
+- `POST /api/runs/{run_id}/stop`
 - `POST /api/runs/{run_id}/approve`
 - `GET /api/approvals`
 - `POST /api/approvals/{approval_id}/decide`
@@ -1033,7 +1132,7 @@ This is the gap analysis the Dictator asked for. The original diagram had the ri
 
 ## 19. Roadmap
 
-### Phase 0 — Foundations (current)
+### Phase 0 — Foundations (implemented)
 
 - Registry, project profile, budget policy, schemas.
 - LangGraph design pipeline with mock and OpenCode backends.
@@ -1045,7 +1144,23 @@ This is the gap analysis the Dictator asked for. The original diagram had the ri
 
 **Exit:** `uiux demo` completes; `uiux serve` works; mock and real OpenCode runs produce artifacts; tests pass.
 
-### Phase 1 — One real feature end-to-end
+### Phase 1 — UI shell, hierarchy, signals (implemented)
+
+- Left icon rail.
+- Full-page Live Flow with CEO/5 leads/codenames, work labels, signal lines, company feed.
+- Approval source/SLA/decision history.
+- Modes, model test, run stop.
+- Minimal scrollbars.
+
+### Phase 2 — File discovery and validation (implemented)
+
+- Recursive Target_ui/current-UI folder search.
+- Current-UI baseline manifest.
+- Empty-folder instructions from the right agent at the right stage.
+- Android project validation (Gradle/Manifest/Compose/tokens).
+- Project/current/Target_ui folder pickers.
+
+### Phase 3 — One real feature end-to-end
 
 - Pick one surface: Profile screen (recommended).
 - Add real Android capture harness (emulator/ADB) and screenshot scenarios.
@@ -1056,7 +1171,7 @@ This is the gap analysis the Dictator asked for. The original diagram had the ri
 
 **Exit:** one approved Profile design package with real screenshots; critic calibration ≥ 0.7 agreement; token cost per screen measured.
 
-### Phase 2 — Surface pods
+### Phase 4 — Surface pods
 
 - Enable Feed, Messages, Create, Explore, Notifications pods.
 - Add content designer, accessibility specialist, localization specialist, performance QA.
@@ -1065,7 +1180,7 @@ This is the gap analysis the Dictator asked for. The original diagram had the ri
 
 **Exit:** 3+ pods shipping with the same gates; first-pass yield ≥ 0.60; no critical escapes.
 
-### Phase 3 — Autonomous maintenance
+### Phase 5 — Autonomous maintenance
 
 - Scheduled design-drift audits.
 - Dependency/OS upgrade lane.
@@ -1075,7 +1190,7 @@ This is the gap analysis the Dictator asked for. The original diagram had the ri
 
 **Exit:** 20 clean runs; zero critical escapes; human spot-check rate 20%; rollback rehearsal passed.
 
-### Phase 4 — Evolution lab
+### Phase 6 — Evolution lab
 
 - Production LangSmith shadow evals.
 - Canary and rollback automation.
@@ -1084,6 +1199,14 @@ This is the gap analysis the Dictator asked for. The original diagram had the ri
 - L4 research pilots with strict caps.
 
 **Exit:** evolution proposals have measurable hit rate; rollback is proven; cost per screen trends down without quality regression.
+
+### Phase 7 — Production infrastructure
+
+- Multi-project switcher with per-project profiles, budgets, artifacts, and Target_ui/current-UI folders.
+- Auth/RBAC and audit log; local single-user fallback.
+- Postgres + object storage (MinIO/S3) with SQLite fallback.
+- Evolution canary/rollback UI and approval SLA notifications.
+- Target_ui annotation editor and design-contract editor UI.
 
 ---
 

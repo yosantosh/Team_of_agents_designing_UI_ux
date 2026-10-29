@@ -11,6 +11,7 @@ import yaml
 
 from .config import Settings
 from .models import utcnow
+from .prompts import WORK_LABELS
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
@@ -32,6 +33,52 @@ def save_yaml(path: Path, data: dict[str, Any]) -> None:
 class Registry:
     data: dict[str, Any]
     path: Path
+
+    def __post_init__(self) -> None:
+        self._enrich()
+
+    def _enrich(self) -> None:
+        """Assign stable codenames and a command chain if the registry omits them."""
+        agents = list(self.data.get("agents", []))
+        tier_leads = {int(k): str(v) for k, v in (self.data.get("tier_leads") or {}).items()}
+        if not tier_leads:
+            for lead in agents:
+                if lead.get("is_lead") and int(lead.get("tier", 0)) > 0:
+                    tier_leads[int(lead["tier"])] = str(lead["id"])
+            self.data["tier_leads"] = {str(k): v for k, v in tier_leads.items()}
+        used_codenames = {str(a.get("codename")) for a in agents if a.get("codename")}
+        next_number = 1
+        for agent in agents:
+            agent_id = str(agent.get("id"))
+            if not agent.get("codename"):
+                while f"A{next_number}" in used_codenames:
+                    next_number += 1
+                agent["codename"] = f"A{next_number}"
+                used_codenames.add(agent["codename"])
+                next_number += 1
+            if not agent.get("work_label"):
+                agent["work_label"] = WORK_LABELS.get(agent_id, agent.get("title", agent_id))
+            if "reports_to" not in agent:
+                if agent_id == "ceo":
+                    agent["reports_to"] = None
+                elif agent_id == "chief_orchestrator":
+                    agent["reports_to"] = "ceo"
+                elif agent_id in tier_leads.values():
+                    agent["reports_to"] = "chief_orchestrator"
+                else:
+                    tier = int(agent.get("tier", 0))
+                    agent["reports_to"] = tier_leads.get(tier, "chief_orchestrator" if tier == 0 else None)
+        reports: dict[str, list[str]] = {}
+        for agent in agents:
+            boss = agent.get("reports_to")
+            if boss:
+                reports.setdefault(str(boss), []).append(str(agent["id"]))
+        for agent in agents:
+            if agent.get("is_lead") or agent["id"] in {"ceo", "chief_orchestrator"}:
+                existing = [str(x) for x in agent.get("manages", [])]
+                if not existing:
+                    agent["manages"] = reports.get(str(agent["id"]), [])
+        self.data["agents"] = agents
 
     @property
     def version(self) -> str:
@@ -60,6 +107,22 @@ class Registry:
     @property
     def gates(self) -> list[dict[str, Any]]:
         return list(self.data.get("gates", []))
+
+    @property
+    def tier_leads(self) -> dict[int, str]:
+        return {int(k): str(v) for k, v in (self.data.get("tier_leads") or {}).items()}
+
+    def codename(self, agent_id: str) -> str:
+        try:
+            return str(self.agent(agent_id).get("codename") or agent_id)
+        except KeyError:
+            return agent_id
+
+    def agent_by_codename(self, codename: str) -> dict[str, Any] | None:
+        for agent in self.agents:
+            if str(agent.get("codename", "")).upper() == codename.upper():
+                return agent
+        return None
 
     def agent(self, agent_id: str) -> dict[str, Any]:
         for agent in self.agents:
@@ -93,10 +156,49 @@ class Registry:
             "owner": self.data.get("owner"),
             "agents": len(self.agents),
             "enabled_agents": len(self.enabled_agents),
+            "leads": sum(1 for a in self.agents if a.get("is_lead")),
             "tiers": len(self.data.get("tiers", [])),
             "pods": len(self.pods),
             "gates": len(self.gates),
             "default_autonomy": self.defaults.get("autonomy_level", "L2"),
+        }
+
+    def org_brief(self) -> dict[str, Any]:
+        """Compact, non-prompt org knowledge injected into the Chief/CEO."""
+        return {
+            "version": self.version,
+            "organization": self.data.get("organization"),
+            "owner": self.data.get("owner"),
+            "tier_leads": self.tier_leads,
+            "agents": [
+                {
+                    "id": a.get("id"),
+                    "codename": a.get("codename"),
+                    "title": a.get("title"),
+                    "tier": a.get("tier"),
+                    "enabled": a.get("enabled"),
+                    "is_lead": a.get("is_lead", False),
+                    "reports_to": a.get("reports_to"),
+                    "manages": a.get("manages", []),
+                    "mission": a.get("mission"),
+                    "work_label": a.get("work_label"),
+                    "inputs": a.get("inputs", []),
+                    "outputs": a.get("outputs", []),
+                    "gates": a.get("gates", []),
+                }
+                for a in self.agents
+            ],
+            "gates": [
+                {
+                    "id": g.get("id"),
+                    "owner": g.get("owner"),
+                    "required": g.get("required", False),
+                    "sla_minutes": g.get("sla_minutes"),
+                    "pass_criteria": g.get("pass_criteria"),
+                }
+                for g in self.gates
+            ],
+            "playbooks": self.data.get("playbooks", {}),
         }
 
     def to_mermaid(self) -> str:
@@ -164,7 +266,33 @@ class Registry:
             elif kind == "budget_cap":
                 self.data.setdefault("defaults", {})[str(target)] = to_value
                 applied.append(change)
+            elif kind == "add_agent":
+                spec = to_value if isinstance(to_value, dict) else {}
+                agent_id = str(spec.get("id") or "").strip()
+                agents = self.data.setdefault("agents", [])
+                if agent_id and not any(a.get("id") == agent_id for a in agents):
+                    agent = {
+                        "id": agent_id,
+                        "title": str(spec.get("title") or agent_id.replace("_", " ").title()),
+                        "tier": int(spec.get("tier", 1)),
+                        "enabled": True,
+                        "prompt_key": str(spec.get("prompt_key", "lead")),
+                        "model": str(spec.get("model", "reasoner")),
+                        "reports_to": spec.get("reports_to", "chief_orchestrator"),
+                        "is_lead": bool(spec.get("is_lead", False)),
+                        "mission": str(spec.get("mission", "Specialist added by an approved evolution proposal.")),
+                        "inputs": spec.get("inputs", []),
+                        "outputs": spec.get("outputs", []),
+                        "tools": spec.get("tools", ["artifact_store"]),
+                        "gates": spec.get("gates", []),
+                        "kpis": spec.get("kpis", []),
+                        "failure_modes": spec.get("failure_modes", []),
+                    }
+                    agents.append(agent)
+                    self.data["agents"] = agents
+                    applied.append(change)
 
+        self._enrich()
         parts = self.version.split(".")
         while len(parts) < 3:
             parts.append("0")

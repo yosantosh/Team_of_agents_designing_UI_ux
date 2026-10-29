@@ -108,7 +108,7 @@ def demo(
 @app.command()
 def run(
     prompt: str = typer.Argument(..., help="The Dictator decree"),
-    mode: str = typer.Option("design", "--mode", "-m", help="design | implement | full"),
+    mode: str = typer.Option("design", "--mode", "-m", help="explore | design | build | ship | audit | fix"),
     backend: Optional[str] = typer.Option(None, "--backend", help="opencode | mock (default from env)"),
     target_ui: bool = typer.Option(True, "--target-ui/--no-target-ui", help="Use the Target_ui folder when present"),
     auto_approve: bool = typer.Option(True, "--auto-approve/--interactive", help="Auto-approve design or pause for the Dictator"),

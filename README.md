@@ -81,13 +81,30 @@ flowchart LR
 
 ---
 
+## Control room
+
+The SPA is a narrow left icon rail plus tabs:
+
+- **Overview** — decree composer, recent runs, live timeline, compact org summary, approvals, budget, artifacts, Target_ui preview, evolution quick list.
+- **Live Flow** — full-page hierarchical graph with CEO/Chief/tier leads/specialists, codenames A1–A36, idle/running/completed/error/waiting icons, current work labels, thin colored signal lines, company feed, and click-through agent detail.
+- **Approvals** — source agent/codename, due time, approve/reject/dictate, decision history.
+- **Artifacts** — run selector, preview, screenshot upload.
+- **Target_ui** — target + current-UI scan, recursive folder search, confidence/conflicts.
+- **Evolution** — Observe → Diagnose → Evaluate → Approve → Apply cards, stop, approve/reject/dictate.
+- **Settings** — project/current UI/Target_ui folders, all OpenCode models, model test, editable token budget, autonomy, project validation, mock-data cleanup.
+
+Hierarchy: **CEO A1 → Chief A2 → five tier leads A3–A7 → specialists A8+**. The Chief receives a compact `company_brief` with the org chart, capabilities, gates, playbooks, and governance. A structured **company feed** records short handoffs, reviews, artifacts, feedback, escalations, and instructions — visible to the run, not a free-form chat.
+
+---
+
 ## Commands
 
 | Command | Purpose |
 |---|---|
 | `uiux demo` | Developer smoke test with deterministic mock models. Zero tokens. The production dashboard never uses mock data. |
 | `uiux run "<decree>" --mode design` | Run a real design-only decree. |
-| `uiux run "<decree>" --mode full --demo` | Run through implementation/QA with simulated QA (labeled). |
+| `uiux run "<decree>" --mode build` | Design + implementation plan. |
+| `uiux run "<decree>" --mode ship` | Design + implementation + QA + release candidate. |
 | `uiux serve` | Start the control room at `http://127.0.0.1:8765`. |
 | `uiux target-ui scan ./target_ui_example --analyze` | Scan and vision-analyze Target_ui images. |
 | `uiux evolve --focus quality` | Ask the independent org auditor for an evolution proposal. |
@@ -172,13 +189,16 @@ Upload screenshots to the control room via `POST /api/runs/{run_id}/screenshots`
 
 ## Dashboard controls
 
-- **Project directory:** Settings → Project directory → Browse. The selected path is injected into new-run context.
-- **Target_ui directory:** Settings or Target_ui tab → Browse. Scan or Scan + analyze.
-- **Model:** Header model selector or Settings → OpenCode model. It lists every model returned by `opencode models`; the selected model is saved as the default for new runs, and each run can override it.
+- **Project directory:** Settings → Project directory → Browse. The selected path is injected into new-run context and validated for Gradle/Manifest/Compose/tokens.
+- **Target_ui directory:** Settings or Target_ui tab → Browse; use **Search recursively** to find `target_ui` / `reference_ui` folders. Scan or Scan + analyze.
+- **Current UI directory:** Settings → Current UI directory → Browse; use recursive search for `current_ui` / `screenshots_of_current_ui`. This is the audit/regression baseline.
+- **Model:** Header model selector or Settings → OpenCode model. It lists every model returned by `opencode models`; the selected model is saved as the default for new runs. Click **Test** to ask the selected model who it is.
 - **Budget:** Click the header budget pill or Settings → Monthly token budget → Edit. Changes persist to `org/budget_policy.yaml` and `.runtime/settings.json`.
-- **Live Flow:** Full hierarchical agent graph. Icons show idle / running / completed / error / waiting. Click any agent for status, last event, artifacts, and token usage.
+- **Live Flow:** Full-page hierarchical graph. Icons show idle / running / completed / error / waiting. Agent cards show codenames and current work labels. Thin colored lines show handoffs, reviews, artifacts, feedback, escalations, and instructions. Click any agent for status, last event, artifacts, and token usage.
+- **Modes:** Explore, Design, Build, Ship, Audit, Fix.
+- **Run stop:** Live run and Live Flow have a Stop button. Default is graceful; the current model call is cancelled and the run/approvals are marked stopped.
 - **Evolution:** Start audit, watch Observe → Diagnose → Evaluate → Approve → Apply cards, stop the audit, and Approve / Reject / Dictate.
-- **Approvals:** Every pending decision is in the Dictator inbox with Approve / Reject / Dictate.
+- **Approvals:** Every pending decision shows its source agent/codename and due time. Approve / Reject / Dictate; decided cards move to Decision History.
 
 ## Token budget
 
@@ -196,12 +216,25 @@ The dashboard shows used/remaining tokens, estimated cost, top agents, and top m
 
 ## Current limitations (honest)
 
-- **Local MVP:** SQLite, in-process event bus, no auth/RBAC.
+**Implemented in this build:** left rail, full-page flow, CEO/5 leads/codenames, company feed and signal lines, approval provenance/SLA, decision history, modes, model test, run stop, recursive folder search, current-UI baseline, project validation, and mock-data cleanup.
+
+**Still queued for later phases:**
+- QA re-check after screenshot upload.
+- Design-contract editor UI.
+- Evolution canary/rollback UI.
+- Multi-project switcher.
+- Auth/RBAC and audit log.
+- Postgres + MinIO object storage.
+- Target_ui annotation editor.
+- Deeper LangSmith datasets/experiments and judge calibration.
+
+Other limitations:
+
+- **Local MVP:** SQLite + in-process event bus.
 - **Implementation is a plan/patch contract**, not an autonomous commit. Code execution should be a separate, sandboxed OpenCode build-worker path with Git worktrees.
 - **Visual QA** has the adapter contract and upload path; the full emulator/ADB automation is the next production step.
 - **Functional/a11y QA** accepts test evidence; it does not yet drive UIAutomator/Espresso itself.
 - **Evolution shadow eval** is heuristic; production needs LangSmith experiments and golden tasks.
-- **LangSmith** is optional via env and not required for local operation.
 - **Figma** is optional; the default source of truth is spec-first + Compose + screenshots.
 
 The full production upgrade path is in [`ui_ux-agent_company.md`](ui_ux-agent_company.md), sections 14–19.

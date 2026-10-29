@@ -295,6 +295,68 @@ class ModelGateway:
 
         raise last_error or ModelProviderError(f"model failed for {role}")
 
+    async def test_model(self, model: str) -> dict[str, Any]:
+        """Small live probe: ask the selected model who it is."""
+        started = time.monotonic()
+        cmd = [
+            self.settings.opencode_bin,
+            "run",
+            "--agent",
+            self.settings.opencode_agent,
+            "--format",
+            "json",
+            "--model",
+            model,
+            "Hey which model you are? Reply in one short sentence.",
+        ]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(self.settings.opencode_cwd),
+            )
+            try:
+                stdout_b, stderr_b = await asyncio.wait_for(
+                    proc.communicate(), timeout=min(120, self.settings.opencode_timeout)
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                return {"ok": False, "model": model, "error": "model test timed out"}
+        except FileNotFoundError:
+            return {"ok": False, "model": model, "error": "opencode binary not found"}
+        stdout = stdout_b.decode("utf-8", errors="replace")
+        stderr = stderr_b.decode("utf-8", errors="replace")
+        texts = []
+        session_id = None
+        error = None
+        for line in stdout.splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            session_id = event.get("sessionID") or session_id
+            if event.get("type") == "text":
+                part = event.get("part") or {}
+                if isinstance(part, dict) and part.get("text"):
+                    texts.append(str(part["text"]))
+            if event.get("type") == "error":
+                error = event.get("error")
+        text = "\n".join(texts).strip()
+        if error and not text:
+            return {"ok": False, "model": model, "error": str(error), "stderr": stderr[-1000:]}
+        return {
+            "ok": bool(text),
+            "model": model,
+            "text": text or "No text returned.",
+            "session_id": session_id,
+            "latency_ms": int((time.monotonic() - started) * 1000),
+            "stderr": stderr[-1000:] if not text else "",
+        }
+
     def list_models(self) -> dict[str, Any]:
         return {
             "backend": self.settings.model_backend,

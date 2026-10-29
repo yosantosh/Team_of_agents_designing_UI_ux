@@ -5,6 +5,17 @@ from typing import Any
 
 
 ROLE_PROMPTS: dict[str, str] = {
+    "ceo": (
+        "You are the CEO agent of a native Android UI/UX company. You own the operating system, "
+        "protect the Dictator's intent, set priorities and constraints, resolve cross-tier conflicts, "
+        "and escalate only major or one-way-door decisions. You do not design or write code. "
+        "At L2/L3 the human is also CEO; at L4 you operate the company and the human is Dictator only."
+    ),
+    "lead": (
+        "You are a Tier Lead in a native Android UI/UX company. You manage the specialists in your tier, "
+        "route their work, enforce the gates, summarize status, and escalate cross-tier or one-way-door decisions "
+        "to the Chief. You do not silently bypass the independent critic or QA. Keep the company feed short and factual."
+    ),
     "manager": (
         "You are the Chief UI/UX Orchestrator for a native Android social app. "
         "You do not author designs. You evaluate evidence, enforce gates, keep scope and budget, "
@@ -146,12 +157,33 @@ ROLE_PROMPTS: dict[str, str] = {
     "org_evolution": (
         "You are an Independent Org Evolution Auditor. Observe traces, rework, cost, defects, and drift. "
         "Propose evidence-backed changes to the agent company. You cannot approve or apply your own proposal. "
-        "Prefer one controlled change at a time with a shadow eval and rollback plan."
+        "Prefer one controlled change at a time with a shadow eval and rollback plan. "
+        "When a bottleneck spans multiple tiers or a new domain appears, you may propose `add_agent` with a full spec in `to` "
+        "(id, title, tier, is_lead, reports_to, mission, inputs, outputs, gates). The Dictator must approve it."
     ),
 }
 
 
 OUTPUT_HINTS: dict[str, str] = {
+    "ceo": """{
+  "directive": "one paragraph",
+  "priorities": ["..."],
+  "constraints": ["..."],
+  "escalate_to_dictator": true,
+  "escalation_reason": "...",
+  "budget_note": "...",
+  "company_health": "green|amber|red"
+}""",
+    "lead": """{
+  "tier": 1,
+  "status": "green|amber|red",
+  "summary": "one short paragraph",
+  "assigned_agents": ["A8", "A9"],
+  "blockers": ["..."],
+  "escalate_to": "chief_orchestrator|dictator|null",
+  "escalation_reason": "...",
+  "feed_message": "short status for the company feed"
+}""",
     "manager": """{
   "verdict": "PASS | NEEDS_REWORK | ESCALATE",
   "score": 0.0,
@@ -404,13 +436,57 @@ OUTPUT_HINTS: dict[str, str] = {
   "title": "...",
   "problem": "...",
   "evidence": ["..."],
-  "changes": [{"type": "enable_agent|disable_agent|model_swap|prompt_update|routing_change|gate_threshold|budget_cap|pod_composition", "target": "...", "from": "...", "to": "...", "rationale": "..."}],
+  "changes": [{"type": "enable_agent|disable_agent|add_agent|model_swap|prompt_update|routing_change|gate_threshold|budget_cap|pod_composition", "target": "...", "from": "...", "to": "...", "rationale": "..."}],
   "expected_impact": {"quality": "...", "speed": "...", "cost": "...", "risk": "..."},
   "risks": ["..."],
   "eval_plan": ["..."],
   "rollback_plan": "..."
 }""",
 }
+
+
+WORK_LABELS: dict[str, str] = {
+    "ceo": "Company review",
+    "chief_orchestrator": "Routing & evaluation",
+    "discovery_lead": "Discovery review",
+    "design_lead": "Design review",
+    "engineering_lead": "Engineering review",
+    "quality_lead": "Quality review",
+    "meta_lead": "Org review",
+    "product_analyst": "Product brief",
+    "ux_researcher": "User research",
+    "android_platform_designer": "Android standards",
+    "ia_interaction_designer": "IA & flows",
+    "content_designer": "Content design",
+    "target_ui_analyst": "Target_ui analysis",
+    "accessibility_specialist": "A11y requirements",
+    "localization_specialist": "Localization",
+    "design_system_architect": "Design tokens",
+    "component_design_engineer": "Component contracts",
+    "visual_ui_designer": "Visual design",
+    "design_contract_editor": "Design contract",
+    "motion_haptics_designer": "Motion & haptics",
+    "brand_illustration_designer": "Brand assets",
+    "independent_design_critic": "Independent critique",
+    "android_tech_lead": "Implementation review",
+    "compose_implementer": "Compose implementation",
+    "design_engineer": "Design engineering",
+    "motion_shader_engineer": "Motion/shader",
+    "visual_qa_inspector": "Visual QA",
+    "functional_a11y_qa": "Functional/a11y QA",
+    "performance_qa": "Performance QA",
+    "security_privacy_reviewer": "Security/privacy",
+    "trust_safety_reviewer": "Trust & Safety",
+    "release_manager": "Release assembly",
+    "analytics_experimentation_lead": "Analytics",
+    "design_ops_librarian": "Org memory",
+    "eval_red_team": "Eval & red team",
+    "org_evolution_auditor": "Evolution audit",
+}
+
+
+def work_label(role: str) -> str:
+    return WORK_LABELS.get(role, role.replace("_", " ").title())
 
 
 def system_prompt(role: str) -> str:

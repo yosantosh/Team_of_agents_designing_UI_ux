@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import shutil
 import time
@@ -23,9 +24,18 @@ from .evolution import EvolutionEngine
 from .gateway import ModelGateway
 from .graph import CompanyGraph
 from .models import ApprovalDecision, EvolutionRequest, RunRequest, new_id
+from .project_validation import validate_android_project
 from .registry import load_budget, load_profile, load_registry
 from .storage import Storage
-from .target_ui import analyze_manifest, load_manifest, save_manifest, scan_target_ui
+from .target_ui import (
+    analyze_manifest,
+    discover_current_ui_path,
+    load_current_manifest,
+    load_manifest,
+    save_manifest,
+    scan_current_ui,
+    scan_target_ui,
+)
 
 
 class TargetScanRequest(BaseModel):
@@ -38,7 +48,12 @@ class SettingsUpdate(BaseModel):
     monthly_token_budget: int | None = None
     project_dir: str | None = None
     target_ui_dir: str | None = None
+    current_ui_dir: str | None = None
     autonomy_level: str | None = None
+
+
+class ModelTestRequest(BaseModel):
+    model: str
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -106,9 +121,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.company = company
     app.state.evolution = evolution
     app.state.tasks = set()
+    app.state.run_tasks: dict[str, asyncio.Task] = {}
     app.state.evolution_tasks: dict[str, asyncio.Task] = {}
     app.state.opencode_models_cache: dict[str, Any] | None = None
     app.state.opencode_models_cached_at: float = 0.0
+    app.state.project_validation_cache: dict[str, Any] = {}
 
     static_dir = Path(__file__).parent / "static"
     if static_dir.exists():
@@ -150,7 +167,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "model": settings.model_override or settings.opencode_model,
             "project_dir": str(settings.project_dir or profile.project.get("repo") or ""),
             "target_ui_dir": str(settings.target_ui_path),
+            "current_ui_dir": str(settings.current_ui_path),
+            "current_ui_dir": str(settings.current_ui_path),
+            "project_validation": _project_validation(),
             "autonomy_level": settings.autonomy_level,
+            "governance": profile.autonomy.get("governance", {}),
             "budget": storage.budget_summary(settings.monthly_token_budget),
             "roborezzi": False,
             "visual_qa_backend": profile.visual_qa.get("backend", "emulator_adb"),
@@ -172,6 +193,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def get_models():
         return gateway.list_models()
 
+    @app.post("/api/models/test")
+    async def test_model(request: ModelTestRequest):
+        if not request.model:
+            raise HTTPException(status_code=400, detail="model is required")
+        return await gateway.test_model(request.model)
+
     @app.get("/api/budget")
     async def get_budget():
         summary = storage.budget_summary(settings.monthly_token_budget)
@@ -181,16 +208,42 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def _effective_project_dir() -> str:
         return str(settings.project_dir or profile.project.get("repo") or "")
 
+    def _enrich_approval(approval: dict[str, Any]) -> dict[str, Any]:
+        """Backfill provenance for approvals created before the source field existed."""
+        gate_sources = {
+            "human_design_approval": "independent_design_critic",
+            "dictator_escalation": "chief_orchestrator",
+            "evolution_approval": "org_evolution_auditor",
+        }
+        if not approval.get("from_agent"):
+            approval["from_agent"] = gate_sources.get(str(approval.get("gate")), "chief_orchestrator")
+        if not approval.get("from_codename"):
+            approval["from_codename"] = registry.codename(str(approval["from_agent"]))
+        return approval
+
+    def _project_validation(force: bool = False) -> dict[str, Any]:
+        path = _effective_project_dir()
+        cached = app.state.project_validation_cache
+        now = time.time()
+        if not force and cached.get("path") == path and now - float(cached.get("at", 0)) < 300:
+            return cached.get("data", {})
+        data = validate_android_project(path or settings.root)
+        app.state.project_validation_cache = {"path": path, "at": now, "data": data}
+        return data
+
     @app.get("/api/settings")
     async def get_settings():
         return {
             "project_dir": _effective_project_dir(),
             "target_ui_dir": str(settings.target_ui_path),
+            "current_ui_dir": str(settings.current_ui_path),
             "model": settings.model_override or settings.opencode_model,
             "monthly_token_budget": settings.monthly_token_budget,
             "autonomy_level": settings.autonomy_level,
+            "governance": profile.autonomy.get("governance", {}),
             "backend": settings.model_backend,
             "registry_version": registry.version,
+            "project_validation": _project_validation(),
         }
 
     @app.put("/api/settings")
@@ -220,6 +273,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(status_code=400, detail="project_dir must be an existing directory")
             settings.project_dir = path
             profile.data.setdefault("project", {})["repo"] = str(path)
+            app.state.project_validation_cache = {}
             updates["project_dir"] = str(path)
         if request.target_ui_dir:
             path = Path(request.target_ui_dir).expanduser().resolve()
@@ -228,6 +282,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             settings.target_ui_path = path
             profile.data.setdefault("target_ui", {})["path"] = str(path)
             updates["target_ui_dir"] = str(path)
+        if request.current_ui_dir:
+            path = Path(request.current_ui_dir).expanduser().resolve()
+            if not path.is_dir():
+                raise HTTPException(status_code=400, detail="current_ui_dir must be an existing directory")
+            settings.current_ui_path = path
+            profile.data.setdefault("current_ui", {})["path"] = str(path)
+            updates["current_ui_dir"] = str(path)
         if request.autonomy_level:
             if request.autonomy_level not in {"L0", "L1", "L2", "L3", "L4"}:
                 raise HTTPException(status_code=400, detail="autonomy_level must be L0..L4")
@@ -355,11 +416,75 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="image not found")
         return FileResponse(safe)
 
+    @app.get("/api/current-ui")
+    async def current_ui_status():
+        return load_current_manifest(settings, profile).model_dump()
+
+    @app.post("/api/current-ui/scan")
+    async def current_ui_scan(request: TargetScanRequest):
+        path = Path(request.path).expanduser() if request.path else settings.current_ui_path
+        manifest = scan_current_ui(settings, profile, path=path)
+        return manifest.model_dump()
+
+    @app.get("/api/current-ui/image")
+    async def current_ui_image(path: str = Query(...)):
+        roots = [settings.current_ui_path]
+        for raw in profile.data.get("current_ui", {}).get("candidate_paths", []):
+            candidate = Path(str(raw)).expanduser()
+            if not candidate.is_absolute():
+                candidate = settings.root / candidate
+            roots.append(candidate)
+        safe = _safe_path(path, roots)
+        if not safe.exists():
+            raise HTTPException(status_code=404, detail="image not found")
+        return FileResponse(safe)
+
+    @app.get("/api/fs/search")
+    async def search_folders(
+        root: str | None = None,
+        patterns: str = "target_ui,current_ui,screenshots_of_current_ui,reference_ui",
+        max_depth: int = 5,
+    ):
+        base = Path(root).expanduser().resolve() if root else settings.root
+        if not base.is_dir():
+            raise HTTPException(status_code=400, detail="root is not a directory")
+        pattern_list = [p.strip().lower() for p in patterns.split(",") if p.strip()]
+        skip = {".git", "node_modules", "build", ".gradle", ".idea", ".runtime", "artifacts", "__pycache__"}
+        results = []
+        base_depth = len(base.parts)
+        for current, dirs, _files in os.walk(base):
+            dirs[:] = [d for d in dirs if d not in skip and not d.startswith(".")]
+            current_path = Path(current)
+            if len(current_path.parts) - base_depth > max_depth:
+                dirs[:] = []
+                continue
+            name = current_path.name.lower()
+            if any(pattern in name for pattern in pattern_list):
+                images = [
+                    p for p in current_path.iterdir()
+                    if p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+                ]
+                results.append({
+                    "name": current_path.name,
+                    "path": str(current_path),
+                    "image_count": len(images),
+                    "match": next((p for p in pattern_list if p in name), ""),
+                })
+                if len(results) >= 100:
+                    break
+        return {"root": str(base), "patterns": pattern_list, "results": results}
+
+    @app.get("/api/project/validate")
+    async def validate_project(path: str | None = None, refresh: bool = False):
+        if path:
+            return validate_android_project(path)
+        return _project_validation(force=refresh)
+
     # ------------------------------------------------------------------ runs
     @app.post("/api/runs")
     async def create_run(request: RunRequest):
         run_id = new_id("run")
-        _spawn(
+        task = _spawn(
             company.run(
                 request.prompt,
                 mode=request.mode,
@@ -372,7 +497,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 run_id=run_id,
             )
         )
+        app.state.run_tasks[run_id] = task
         return {"run_id": run_id, "status": "queued", "events_url": f"/api/runs/{run_id}/events"}
+
+    @app.post("/api/runs/{run_id}/stop")
+    async def stop_run(run_id: str):
+        run = storage.get_run(run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="run not found")
+        task = app.state.run_tasks.get(run_id)
+        if task and not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        return await company.stop(run_id)
 
     @app.get("/api/runs")
     async def list_runs(limit: int = 50):
@@ -389,8 +527,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "state": state,
             "artifacts": storage.list_artifacts(run_id),
             "events": storage.list_events(run_id, limit=200),
-            "approvals": [a for a in storage.list_approvals(None, 200) if a.get("run_id") == run_id],
+            "messages": storage.list_agent_messages(run_id, limit=300),
+            "approvals": [
+                _enrich_approval(a)
+                for a in storage.list_approvals(None, 200)
+                if a.get("run_id") == run_id
+            ],
         }
+
+    @app.get("/api/runs/{run_id}/messages")
+    async def list_run_messages(run_id: str, after_id: int = 0):
+        if not storage.get_run(run_id):
+            raise HTTPException(status_code=404, detail="run not found")
+        return {"messages": storage.list_agent_messages(run_id, after_id=after_id, limit=500)}
 
     @app.get("/api/runs/{run_id}/events")
     async def stream_events(run_id: str, after_id: int = 0):
@@ -463,7 +612,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/approvals")
     async def list_approvals(status: str | None = "pending", limit: int = 100):
         query_status = None if status in {None, "", "all"} else status
-        return {"approvals": storage.list_approvals(query_status, limit)}
+        return {"approvals": [_enrich_approval(a) for a in storage.list_approvals(query_status, limit)]}
 
     @app.post("/api/approvals/{approval_id}/decide")
     async def decide_approval(approval_id: str, decision: ApprovalDecision):

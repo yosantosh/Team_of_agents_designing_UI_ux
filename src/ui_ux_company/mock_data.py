@@ -272,6 +272,18 @@ def mock_response(role: str, context: dict[str, Any]) -> dict[str, Any]:
             "assumptions": ["Mock QA; no emulator run. Production requires UIAutomator/AccessibilityChecks evidence."],
         }
 
+    if role == "ceo":
+        return {
+            "directive": "Proceed with a design-led profile improvement. Keep the current product scope and protect the pure OLED black identity.",
+            "priorities": ["Clarity of the primary action", "Target_ui fidelity", "Release evidence"],
+            "constraints": ["No mock evidence", "Human remains CEO at L2", "Accessibility overrides target imagery"],
+            "escalate_to_dictator": False,
+            "escalation_reason": "",
+            "budget_note": "Within the monthly token budget.",
+            "company_health": "green",
+            "assumptions": ["Mock CEO review; real runs call the selected OpenCode model."],
+        }
+
     if role == "manager":
         return {
             "verdict": "PASS",

@@ -17,10 +17,12 @@ from .config import Settings
 from .events import EventBus
 from .gateway import ModelGateway
 from .models import new_id, utcnow
+from .prompts import work_label
 from .registry import BudgetPolicy, ProjectProfile, Registry, load_budget, load_profile, load_registry
 from .storage import Storage
 from .target_ui import (
     analyze_manifest,
+    load_current_manifest,
     load_manifest,
     match_screenshots,
     save_manifest,
@@ -42,6 +44,7 @@ class CompanyState(TypedDict, total=False):
     target_ui_enabled: bool
     target_ui_path: str
     change_request: dict[str, Any]
+    ceo_directive: dict[str, Any]
     target_manifest: dict[str, Any]
     research: dict[str, Any]
     synthesis: dict[str, Any]
@@ -118,6 +121,7 @@ class CompanyGraph:
     def _build(self):
         builder = StateGraph(CompanyState)
         builder.add_node("intake", self._intake)
+        builder.add_node("ceo_review", self._ceo_review)
         builder.add_node("target_ui", self._target_ui)
         builder.add_node("discovery", self._discovery)
         builder.add_node("synthesis", self._synthesis)
@@ -134,7 +138,8 @@ class CompanyGraph:
         builder.add_node("escalate", self._escalate)
 
         builder.add_edge(START, "intake")
-        builder.add_edge("intake", "target_ui")
+        builder.add_edge("intake", "ceo_review")
+        builder.add_edge("ceo_review", "target_ui")
         builder.add_edge("target_ui", "discovery")
         builder.add_edge("discovery", "synthesis")
         builder.add_edge("synthesis", "design_system")
@@ -185,6 +190,54 @@ class CompanyGraph:
         return "escalate"
 
     # --------------------------------------------------------------- helpers
+    def _gate_sla(self, gate_id: str, default: int = 1440) -> int:
+        for gate in self.registry.gates:
+            if gate.get("id") == gate_id and gate.get("sla_minutes"):
+                return int(gate["sla_minutes"])
+        return default
+
+    def _dispatcher(self, role: str) -> str:
+        try:
+            return str(self.registry.agent(role).get("reports_to") or "chief_orchestrator")
+        except KeyError:
+            return "chief_orchestrator"
+
+    async def _message(
+        self,
+        state: CompanyState,
+        from_agent: str,
+        to_agent: str | None,
+        kind: str,
+        did: str = "",
+        doing: str = "",
+        needs: str = "",
+        artifact: str | None = None,
+        confidence: float | None = None,
+    ) -> dict[str, Any]:
+        message = self.storage.add_agent_message(
+            state["run_id"],
+            from_agent,
+            to_agent,
+            kind,
+            did=did,
+            doing=doing,
+            needs=needs,
+            artifact=artifact,
+            confidence=confidence,
+        )
+        await self.bus.publish(
+            state["run_id"],
+            "agent.message",
+            did or doing or kind,
+            from_agent,
+            {
+                "message": message,
+                "from_codename": self.registry.codename(from_agent) if from_agent else None,
+                "to_codename": self.registry.codename(to_agent) if to_agent else None,
+            },
+        )
+        return message
+
     async def _event(
         self,
         state: CompanyState,
@@ -204,12 +257,25 @@ class CompanyGraph:
         context: dict[str, Any],
         images: list[Path] | None = None,
     ):
+        dispatcher = self._dispatcher(role)
+        await self._message(
+            state,
+            dispatcher,
+            role,
+            "handoff",
+            did=f"Assigned {work_label(role)}",
+            doing=f"{work_label(role)} in progress",
+        )
         await self._event(
             state,
             "agent.started",
             f"{role} started",
             role,
-            {"model": state.get("model") or self.settings.model_override or "registry default"},
+            {
+                "model": state.get("model") or self.settings.model_override or "registry default",
+                "work_label": work_label(role),
+                "task_id": role,
+            },
         )
         started = time.monotonic()
         try:
@@ -237,7 +303,15 @@ class CompanyGraph:
             "agent.completed",
             f"{role} completed in {int((time.monotonic() - started) * 1000)}ms",
             role,
-            {"usage": result.usage, "model": result.model},
+            {"usage": result.usage, "model": result.model, "work_label": work_label(role)},
+        )
+        await self._message(
+            state,
+            role,
+            dispatcher,
+            "artifact",
+            did=f"Completed {work_label(role)}",
+            doing="Handing result back",
         )
         return result
 
@@ -281,6 +355,9 @@ class CompanyGraph:
                 "prompt": state["prompt"],
                 "project": self.profile.project,
                 "autonomy": self.profile.autonomy,
+                "governance": self.profile.autonomy.get("governance", {}),
+                "company_brief": self.registry.org_brief(),
+                "playbooks": self.registry.data.get("playbooks", {}),
                 "target_ui": self.profile.target_ui,
             },
         )
@@ -291,12 +368,64 @@ class CompanyGraph:
         change_request.setdefault("target_screens", [])
         change_request.setdefault("acceptance_criteria", [])
         await self._write(state, "product_brief.json", change_request, "product_analyst")
+        await self._write(state, "company_brief.json", self.registry.org_brief(), "ceo")
         await self._event(state, "stage.completed", "Product brief ready", "product_analyst")
         return {
             "change_request": change_request,
             "rework_counts": {"design": 0, "implementation": 0},
             "status": "discovery",
         }
+
+    async def _ceo_review(self, state: CompanyState) -> dict[str, Any]:
+        self._set_status(state, "ceo_review")
+        await self._event(state, "stage.started", "CEO review", "ceo")
+        result = await self._call(
+            state,
+            "ceo",
+            "Review the decree and product brief. Set priorities and constraints, confirm the governance mode, "
+            "and escalate only major or one-way-door decisions to the Dictator.",
+            {
+                "change_request": state.get("change_request", {}),
+                "company_brief": self.registry.org_brief(),
+                "governance": self.profile.autonomy.get("governance", {}),
+                "autonomy_level": state.get("autonomy_level"),
+                "budget": self.storage.budget_summary(self.settings.monthly_token_budget),
+            },
+        )
+        directive = dict(result.data)
+        await self._write(state, "ceo_directive.json", directive, "ceo")
+        mode = str(state.get("mode", "design"))
+        playbook = self.registry.data.get("playbooks", {}).get(mode, {})
+        routing_plan = {
+            "mode": mode,
+            "playbook": playbook,
+            "tier_leads": self.registry.tier_leads,
+            "selected_agents": self.registry.enabled_agent_ids(),
+            "gates": [g.get("id") for g in self.registry.gates if g.get("required")],
+            "budget": self.storage.budget_summary(self.settings.monthly_token_budget),
+            "ceo_directive": directive,
+            "change_request": state.get("change_request", {}),
+        }
+        await self._write(state, "routing_plan.json", routing_plan, "chief_orchestrator")
+        await self._message(
+            state,
+            "ceo",
+            "chief_orchestrator",
+            "broadcast",
+            did="CEO review complete",
+            doing="Handing priorities and constraints to the Chief",
+            needs=str(directive.get("escalation_reason") or ""),
+            artifact="ceo_directive.json",
+        )
+        if directive.get("escalate_to_dictator"):
+            await self._event(
+                state,
+                "ceo.escalation",
+                "CEO flagged a major decision for the Dictator",
+                "ceo",
+                {"reason": directive.get("escalation_reason")},
+            )
+        return {"ceo_directive": directive, "status": "target_ui"}
 
     async def _target_ui(self, state: CompanyState) -> dict[str, Any]:
         if not state.get("target_ui_enabled", True):
@@ -347,6 +476,21 @@ class CompanyGraph:
                 "No Target_ui images found; using research-led design path",
                 "target_ui_analyst",
             )
+            await self._message(
+                state,
+                "target_ui_analyst",
+                "design_lead",
+                "instruction",
+                did="No Target_ui images found",
+                doing="Proceeding research-led",
+                needs="Add target images to the Target_ui folder for higher visual fidelity",
+            )
+            await self._event(
+                state,
+                "agent.instruction",
+                "Target_ui is empty: add reference images for exact visual fidelity",
+                "target_ui_analyst",
+            )
         return {"target_manifest": data, "status": "discovery"}
 
     async def _discovery(self, state: CompanyState) -> dict[str, Any]:
@@ -373,12 +517,30 @@ class CompanyGraph:
                 None,
             ),
         ]
+        for role, _goal, _context, _images in jobs:
+            await self._message(
+                state,
+                self._dispatcher(role),
+                role,
+                "handoff",
+                did=f"Assigned {work_label(role)}",
+                doing=f"{work_label(role)} in progress",
+            )
         results = await self.agents.run_many(
             jobs,
             run_id=state["run_id"],
             backend=state.get("backend"),
             model=state.get("model"),
         )
+        for role, _goal, _context, _images in jobs:
+            await self._message(
+                state,
+                role,
+                self._dispatcher(role),
+                "artifact",
+                did=f"Completed {work_label(role)}",
+                doing="Handing result to discovery lead",
+            )
         research = {
             "ux": results[0].data,
             "android": results[1].data,
@@ -432,10 +594,16 @@ class CompanyGraph:
         result = await self._call(
             state,
             "visual_ui_designer",
-            "Compose a high-fidelity screen specification from approved tokens and components. Specify all states and reconcile Target_ui.",
+            "Compose a high-fidelity screen specification from approved tokens and components. Specify all states and reconcile Target_ui. "
+            "When Target_ui images exist, match their layout, composition, and visual hierarchy as exactly as possible; "
+            "only deviate for accessibility or Android platform law, and record the reason.",
             {
                 "design_tokens": state.get("design_tokens", {}),
                 "target_manifest": state.get("target_manifest", {}),
+                "target_fidelity": {
+                    "precedence": self.profile.target_ui.get("precedence", "tiered"),
+                    "fidelity": self.profile.target_ui.get("fidelity", "exact"),
+                },
                 "change_request": state.get("change_request", {}),
                 "synthesis": state.get("synthesis", {}),
                 "previous_critique": critique,
@@ -524,6 +692,16 @@ class CompanyGraph:
             "independent_design_critic",
             {"gate": "design_critique", "status": gate, "score": score, "issues": critique.get("issues", [])},
         )
+        await self._message(
+            state,
+            "independent_design_critic",
+            "visual_ui_designer" if gate == "needs_rework" else "design_lead",
+            "feedback" if gate == "needs_rework" else "review",
+            did=f"Critique complete: {verdict} ({score:.2f})",
+            doing="Sending rework instructions" if gate == "needs_rework" else "Handing approved design to the design lead",
+            needs="Resolve the listed critique issues" if gate == "needs_rework" else "",
+            artifact="design_critique.json",
+        )
         return {"critique": critique, "critique_gate": gate, "rework_counts": counts, "status": "human_gate"}
 
     async def _human_gate(self, state: CompanyState) -> dict[str, Any]:
@@ -543,7 +721,14 @@ class CompanyGraph:
         ]
         if state.get("auto_approve"):
             approval = self.storage.create_approval(
-                state["run_id"], "human_design_approval", title, message, options
+                state["run_id"],
+                "human_design_approval",
+                title,
+                message,
+                options,
+                from_agent="independent_design_critic",
+                from_codename=self.registry.codename("independent_design_critic"),
+                sla_minutes=self._gate_sla("human_design_approval"),
             )
             decision = {"decision": "approve", "option_id": "approve", "notes": "Auto-approved in demo mode.", "mode": "auto"}
             self.storage.decide_approval(approval["approval_id"], decision)
@@ -554,7 +739,14 @@ class CompanyGraph:
         approval = self.storage.pending_approval_for_run(state["run_id"], "human_design_approval")
         if not approval:
             approval = self.storage.create_approval(
-                state["run_id"], "human_design_approval", title, message, options
+                state["run_id"],
+                "human_design_approval",
+                title,
+                message,
+                options,
+                from_agent="independent_design_critic",
+                from_codename=self.registry.codename("independent_design_critic"),
+                sla_minutes=self._gate_sla("human_design_approval"),
             )
         await self._event(
             state,
@@ -562,6 +754,16 @@ class CompanyGraph:
             "Design approval required",
             "dictator",
             {"approval_id": approval["approval_id"], "gate": "human_design_approval", "title": title, "message": message, "options": options},
+        )
+        await self._message(
+            state,
+            "independent_design_critic",
+            "dictator",
+            "escalation",
+            did="Design passed critique; approval requested",
+            doing="Waiting for the Dictator",
+            needs="Approve, reject, or dictate the design direction",
+            artifact="design_critique.json",
         )
         decision = interrupt(
             {
@@ -592,8 +794,12 @@ class CompanyGraph:
             "status": "implement" if approved else "escalate",
         }
 
+    @staticmethod
+    def _design_only(mode: str | None) -> bool:
+        return mode in {"explore", "design", "audit", "fix"}
+
     async def _implement(self, state: CompanyState) -> dict[str, Any]:
-        if state.get("mode") == "design":
+        if self._design_only(state.get("mode")):
             data = {
                 "status": "skipped",
                 "reason": "design-only run; implementation is a separate, explicitly approved run.",
@@ -626,7 +832,7 @@ class CompanyGraph:
         return {"implementation": data, "status": "qa"}
 
     async def _qa(self, state: CompanyState) -> dict[str, Any]:
-        if state.get("mode") == "design" or state.get("implementation", {}).get("status") == "skipped":
+        if self._design_only(state.get("mode")) or state.get("implementation", {}).get("status") == "skipped":
             qa = {
                 "visual": {"verdict": "SKIPPED", "reason": "design-only run", "simulated": False},
                 "functional": {"verdict": "SKIPPED", "reason": "design-only run", "simulated": False},
@@ -638,6 +844,33 @@ class CompanyGraph:
         self._set_status(state, "qa")
         await self._event(state, "stage.started", "Visual + functional/a11y QA", "visual_qa_inspector")
         screenshots = screenshots_for_run(self.artifacts, state["run_id"])
+        current_manifest = load_current_manifest(self.settings, self.profile)
+        if current_manifest.status == "not_available":
+            await self._message(
+                state,
+                "visual_qa_inspector",
+                "quality_lead",
+                "instruction",
+                did="No current-UI baseline found",
+                doing="QA will be limited to target/spec evidence",
+                needs="Add current-UI screenshots for visual regression and audit",
+            )
+            await self._event(
+                state,
+                "agent.instruction",
+                "Current UI is empty: capture current screenshots for regression evidence",
+                "visual_qa_inspector",
+            )
+        if not screenshots:
+            await self._message(
+                state,
+                "visual_qa_inspector",
+                "quality_lead",
+                "instruction",
+                did="No rendered screenshots supplied",
+                doing="Visual QA cannot produce release evidence",
+                needs="Run the emulator/ADB capture harness or upload screenshots",
+            )
         manifest_data = state.get("target_manifest", {})
         target_images = []
         if isinstance(manifest_data, dict):
@@ -746,7 +979,7 @@ class CompanyGraph:
         mode = state.get("mode", "design")
         design_approved = bool(state.get("design_approved"))
         simulated = bool(state.get("demo"))
-        if mode == "design":
+        if self._design_only(mode):
             deterministic = critique_gate == "pass" and design_approved
         else:
             deterministic = critique_gate == "pass" and design_approved and qa_gate == "pass"
@@ -817,7 +1050,7 @@ class CompanyGraph:
         release["generated_at"] = utcnow()
         release["mode"] = state.get("mode", "design")
         release["simulated"] = bool(state.get("demo"))
-        release["artifact_type"] = "design_package" if state.get("mode") == "design" else "release_candidate"
+        release["artifact_type"] = "design_package" if self._design_only(state.get("mode")) else "release_candidate"
         release["gates"] = {
             "design_critique": state.get("critique_gate"),
             "human_design_approval": "pass" if state.get("design_approved") else "not_run",
@@ -884,6 +1117,9 @@ class CompanyGraph:
             "Dictator decision required",
             reason,
             options,
+            from_agent="chief_orchestrator",
+            from_codename=self.registry.codename("chief_orchestrator"),
+            sla_minutes=240,
         )
         escalation = {
             "run_id": state["run_id"],
@@ -901,6 +1137,16 @@ class CompanyGraph:
             "Escalation requires a Dictator decision",
             "chief_orchestrator",
             {"approval_id": approval["approval_id"], "gate": "dictator_escalation", "reason": reason, "options": options},
+        )
+        await self._message(
+            state,
+            "chief_orchestrator",
+            "dictator",
+            "escalation",
+            did="Escalating a one-way-door decision",
+            doing="Waiting for the Dictator",
+            needs=reason,
+            artifact="escalation.json",
         )
         return {"status": "escalated", "approval_id": approval["approval_id"]}
 
@@ -963,6 +1209,8 @@ class CompanyGraph:
         await self._ensure_graph()
         run_id = run_id or new_id("run")
         self.storage.create_run(run_id, prompt, mode, "running")
+        self.storage.add_agent_message(run_id, "dictator", "ceo", "handoff", did="Issued a new decree", doing="CEO intake and priority check")
+        self.storage.add_agent_message(run_id, "ceo", "chief_orchestrator", "handoff", did="Accepted the decree", doing="Routing the company")
         await self.bus.publish(run_id, "run.started", "Run started", "chief_orchestrator", {"prompt": prompt, "mode": mode})
         initial: CompanyState = {
             "run_id": run_id,
@@ -997,6 +1245,15 @@ class CompanyGraph:
                     {"interrupts": clean.get("__interrupt__")},
                 )
             else:
+                self.storage.add_agent_message(
+                    run_id,
+                    "chief_orchestrator",
+                    "dictator",
+                    "broadcast",
+                    did=f"Run {status}",
+                    doing="Reporting the outcome",
+                    artifact="release_candidate.json" if clean.get("release") else None,
+                )
                 await self.bus.publish(
                     run_id,
                     "run.completed",
@@ -1011,6 +1268,24 @@ class CompanyGraph:
             self.storage.update_run(run_id, status="failed", state={**initial, "status": "failed", "error": error})
             await self.bus.publish(run_id, "run.failed", str(exc), "chief_orchestrator", error)
             return {**initial, "status": "failed", "error": error}
+
+    async def stop(self, run_id: str, reason: str = "Stopped by Dictator.") -> dict[str, Any]:
+        pending = self.storage.pending_approval_for_run(run_id)
+        if pending:
+            self.storage.decide_approval(
+                pending["approval_id"],
+                {"decision": "stop", "notes": reason},
+                status="stopped",
+            )
+        run = self.storage.get_run(run_id)
+        if run:
+            self.storage.update_run(
+                run_id,
+                status="stopped",
+                state={**(run.get("state") or {}), "status": "stopped", "stopped_reason": reason},
+            )
+        await self.bus.publish(run_id, "run.stopped", reason, "dictator", {"reason": reason})
+        return {"run_id": run_id, "status": "stopped", "reason": reason}
 
     async def resume(self, run_id: str, decision: dict[str, Any]) -> dict[str, Any]:
         await self._ensure_graph()
