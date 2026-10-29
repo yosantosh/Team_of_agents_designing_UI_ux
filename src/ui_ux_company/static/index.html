@@ -28,6 +28,7 @@
     <button class="tab" data-tab="flow" title="Live Flow"><span class="rail-icon">⌘</span><span class="rail-label">Live Flow</span></button>
     <button class="tab" data-tab="approvals" title="Approvals"><span class="rail-icon">✓</span><span class="rail-label">Approvals</span><span class="count" id="approval-badge">0</span></button>
     <button class="tab" data-tab="artifacts" title="Artifacts"><span class="rail-icon">▤</span><span class="rail-label">Artifacts</span></button>
+    <button class="tab" data-tab="contract" title="Design contract"><span class="rail-icon">▦</span><span class="rail-label">Contract</span></button>
     <button class="tab" data-tab="target" title="Target_ui"><span class="rail-icon">◉</span><span class="rail-label">Target_ui</span></button>
     <button class="tab" data-tab="evolution" title="Evolution"><span class="rail-icon">✦</span><span class="rail-label">Evolution</span></button>
     <button class="tab" data-tab="settings" title="Settings"><span class="rail-icon">⚙</span><span class="rail-label">Settings</span></button>
@@ -201,6 +202,7 @@
           <div class="row">
             <select id="artifact-run-select" class="wide-select"></select>
             <button class="btn ghost small" id="upload-screenshots">Upload screenshots</button>
+            <button class="btn primary small" id="recheck-qa">Re-run QA</button>
             <input type="file" id="screenshot-input" accept="image/*" multiple hidden />
           </div>
         </div>
@@ -209,6 +211,33 @@
       <div class="artifacts-layout">
         <div class="card"><div id="artifact-list" class="artifact-list scroll tall"></div></div>
         <div class="card"><div id="artifact-preview" class="artifact-preview">Select an artifact to preview it.</div></div>
+      </div>
+    </section>
+
+    <!-- DESIGN CONTRACT -->
+    <section id="tab-contract" class="tab-panel">
+      <div class="card">
+        <div class="card-head">
+          <h2>Design contract editor</h2>
+          <div class="row">
+            <select id="contract-run-select" class="wide-select"></select>
+            <button class="btn ghost small" id="contract-refresh">Refresh</button>
+            <button class="btn primary small" id="contract-save">Save version</button>
+            <button class="btn ghost small" id="contract-recrtique">Re-run critique</button>
+          </div>
+        </div>
+        <p class="hint">The contract is the authoritative acceptance matrix. Edits are versioned; re-running critique uses the latest saved contract.</p>
+      </div>
+      <div class="contract-layout">
+        <div class="card">
+          <textarea id="contract-editor" class="contract-editor" spellcheck="false" placeholder="Select a run with a design contract…"></textarea>
+          <div id="contract-status" class="muted" style="margin-top:8px"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Versions & critique</h2></div>
+          <div id="contract-versions" class="list scroll"></div>
+          <div id="contract-critique" class="artifact-preview" style="margin-top:10px"></div>
+        </div>
       </div>
     </section>
 

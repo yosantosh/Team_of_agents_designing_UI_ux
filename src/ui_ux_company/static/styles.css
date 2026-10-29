@@ -297,6 +297,11 @@ input[type="checkbox"] { accent-color: var(--purple); }
 .proposal-block p { color: var(--muted); font-size: 10.5px; line-height: 1.55; }
 .proposal-block pre { white-space: pre-wrap; word-break: break-word; font-size: 9.5px; color: #d7d7dc; background: rgba(0,0,0,.35); border: 1px solid var(--border); border-radius: 10px; padding: 9px; max-height: 210px; overflow: auto; }
 
+/* Design contract */
+.contract-layout { display: grid; grid-template-columns: 1.3fr .7fr; gap: var(--gap); margin-top: var(--gap); align-items: start; }
+.contract-editor { min-height: 62vh; font-family: var(--mono); font-size: 10.5px; line-height: 1.55; }
+.contract-layout .artifact-preview { min-height: 180px; }
+
 /* Settings */
 .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--gap); }
 .settings-grid .card { min-height: 140px; }

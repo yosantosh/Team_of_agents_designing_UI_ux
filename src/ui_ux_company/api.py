@@ -56,6 +56,10 @@ class ModelTestRequest(BaseModel):
     model: str
 
 
+class DesignContractUpdate(BaseModel):
+    contract: dict[str, Any]
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     registry = load_registry(settings)
@@ -500,6 +504,70 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.run_tasks[run_id] = task
         return {"run_id": run_id, "status": "queued", "events_url": f"/api/runs/{run_id}/events"}
 
+    def _contract_versions(run_id: str) -> list[dict[str, Any]]:
+        artifacts = storage.list_artifacts(run_id)
+        return [
+            artifact for artifact in artifacts
+            if artifact["name"].startswith("design_contract") and artifact["name"].endswith(".json")
+        ]
+
+    def _latest_contract(run_id: str) -> dict[str, Any] | None:
+        versions = _contract_versions(run_id)
+        if not versions:
+            return None
+        latest = sorted(versions, key=lambda item: item["created_at"])[-1]
+        try:
+            return json.loads(Path(latest["path"]).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+
+    @app.get("/api/runs/{run_id}/design-contract")
+    async def get_design_contract(run_id: str):
+        if not storage.get_run(run_id):
+            raise HTTPException(status_code=404, detail="run not found")
+        contract = _latest_contract(run_id)
+        if contract is None:
+            raise HTTPException(status_code=404, detail="no design contract for this run")
+        versions = [
+            {"name": item["name"], "created_at": item["created_at"], "sha256": item["sha256"]}
+            for item in _contract_versions(run_id)
+        ]
+        return {"contract": contract, "versions": versions}
+
+    @app.put("/api/runs/{run_id}/design-contract")
+    async def update_design_contract(run_id: str, request: DesignContractUpdate):
+        if not storage.get_run(run_id):
+            raise HTTPException(status_code=404, detail="run not found")
+        contract = request.contract
+        if not isinstance(contract, dict) or not contract:
+            raise HTTPException(status_code=400, detail="contract must be a non-empty object")
+        versions = _contract_versions(run_id)
+        next_version = len(versions) + 1
+        artifacts.write_json(run_id, f"design_contract.v{next_version}.json", contract, created_by="dictator")
+        artifacts.write_json(run_id, "design_contract.json", contract, created_by="dictator")
+        await bus.publish(run_id, "design_contract.updated", f"Design contract v{next_version} saved", "dictator", {"version": next_version})
+        return {"contract": contract, "version": next_version, "versions": versions}
+
+    @app.post("/api/runs/{run_id}/recritique")
+    async def recritique_run(run_id: str):
+        if not storage.get_run(run_id):
+            raise HTTPException(status_code=404, detail="run not found")
+        contract = _latest_contract(run_id)
+        try:
+            return await company.recritique(run_id, contract)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/runs/{run_id}/recheck-qa")
+    async def recheck_run_qa(run_id: str):
+        run = storage.get_run(run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="run not found")
+        try:
+            return await company.recheck_qa(run_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     @app.post("/api/runs/{run_id}/stop")
     async def stop_run(run_id: str):
         run = storage.get_run(run_id)
@@ -706,6 +774,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    @app.post("/api/evolve/{proposal_id}/rollback")
+    async def rollback_evolution(proposal_id: str):
+        proposal = storage.get_evolution(proposal_id)
+        if not proposal:
+            raise HTTPException(status_code=404, detail="proposal not found")
+        try:
+            return await evolution.rollback(proposal_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/evolve/{proposal_id}/stop")
     async def stop_evolution(proposal_id: str):

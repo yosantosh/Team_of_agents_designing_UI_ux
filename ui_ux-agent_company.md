@@ -762,9 +762,10 @@ The SPA uses a narrow left icon rail (labels on hover) and tabs:
 - **Overview** — decree composer, recent runs, live timeline, compact org summary, quick approvals, token budget, quick artifacts, Target_ui mini-preview, evolution quick list.
 - **Live Flow** — full-page hierarchical graph with CEO/Chief/tier leads/specialists, codenames A1–A36, idle/running/completed/error/waiting icons, current work labels, thin colored signal lines, company feed, live SSE events, and click-through agent detail.
 - **Approvals** — source agent/codename, due time, approve/reject/dictate, decision history.
-- **Artifacts** — run selector, artifact list, JSON/text/image preview, and real screenshot upload for QA evidence.
+- **Artifacts** — run selector, artifact list, JSON/text/image preview, screenshot upload, and Re-run QA (reuses the existing run; no design rerun).
+- **Contract** — versioned design-contract editor with Save version and Re-run critique.
 - **Target_ui** — target + current-UI browse, recursive folder search, scan, scan + vision analysis, image grid, confidence, conflicts.
-- **Evolution** — start/stop audit, live Observe → Diagnose → Evaluate → Approve → Apply cards, agent output modals, proposal detail, Approve / Reject / Dictate.
+- **Evolution** — start/stop audit, live Observe → Diagnose → Evaluate → Approve → Apply → Canary cards, agent output modals, proposal detail, Approve / Reject / Dictate, and registry rollback.
 - **Settings** — project directory browse + Gradle/Manifest/Compose/token validation, Current UI directory, Target_ui directory, OpenCode model selector (all `opencode models`), model test, editable monthly token budget, autonomy level, runtime info, and mock/demo data purge.
 
 Production defaults:
@@ -774,8 +775,11 @@ Production defaults:
 - The budget is persisted to `org/budget_policy.yaml` and `.runtime/settings.json`.
 - Project/Current UI/Target_ui directories are persisted and injected into new-run context.
 - Run stop cancels the graph task and the OpenCode subprocess; pending approvals are marked stopped.
+- QA re-check reuses the existing checkpoint and updates `qa_report.json`/`evaluation.json`; it does not redo design.
+- Design-contract edits are versioned; Re-run critique updates `design_critique.json`.
 - Approvals carry `from_agent`, `from_codename`, `sla_minutes`, and `due_at`.
 - The company feed is stored in `agent_messages` and streamed as `agent.message` events.
+- Evolution rollback restores the previous registry version from `org/registry_history/`.
 
 ### 11.2 Production upgrade path
 
@@ -1148,9 +1152,13 @@ This is the gap analysis the Dictator asked for. The original diagram had the ri
 
 - Left icon rail.
 - Full-page Live Flow with CEO/5 leads/codenames, work labels, signal lines, company feed.
+- Real tier-lead review gates (discovery, design, engineering, quality).
 - Approval source/SLA/decision history.
 - Modes, model test, run stop.
 - Minimal scrollbars.
+- QA re-check after screenshot upload.
+- Design-contract editor with versioning and Re-run critique.
+- Evolution registry rollback; canary card as manual scope review.
 
 ### Phase 2 — File discovery and validation (implemented)
 

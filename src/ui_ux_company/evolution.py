@@ -334,6 +334,22 @@ class EvolutionEngine:
         self.artifacts.write_json(proposal_id, "evolution_state.json", clean, created_by="org_evolution_auditor")
         return clean
 
+    async def rollback(self, proposal_id: str) -> dict[str, Any]:
+        result = self.registry.rollback(proposal_id)
+        self.storage.update_evolution(
+            proposal_id,
+            status="rolled_back",
+            decision={"decision": "rollback", "notes": f"Restored registry {result['rolled_back_to']}."},
+        )
+        await self.bus.publish(
+            proposal_id,
+            "evolution.rolled_back",
+            f"Registry rolled back to {result['rolled_back_to']}",
+            "architecture_registry_service",
+            result,
+        )
+        return result
+
     async def stop(self, proposal_id: str) -> dict[str, Any]:
         """Stop an evolution run, whether it is executing or paused at approval."""
         pending = self.storage.pending_approval_for_run(proposal_id, "evolution_approval")

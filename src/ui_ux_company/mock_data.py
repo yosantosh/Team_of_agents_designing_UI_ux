@@ -284,6 +284,19 @@ def mock_response(role: str, context: dict[str, Any]) -> dict[str, Any]:
             "assumptions": ["Mock CEO review; real runs call the selected OpenCode model."],
         }
 
+    if role == "lead":
+        return {
+            "tier": 1,
+            "status": "green",
+            "summary": "Tier review passed. The required artifacts are present and testable; no blocking issues.",
+            "assigned_agents": ["A8", "A9"],
+            "blockers": [],
+            "escalate_to": None,
+            "escalation_reason": "",
+            "feed_message": "Tier review complete; handing off.",
+            "assumptions": ["Mock tier review; real runs call the selected OpenCode model."],
+        }
+
     if role == "manager":
         return {
             "verdict": "PASS",

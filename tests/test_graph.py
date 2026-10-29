@@ -37,6 +37,8 @@ def test_mock_design_run_completes(settings):
         assert design_approvals[0]["from_agent"] == "independent_design_critic"
         run = graph.storage.get_run(result["run_id"])
         assert run["status"] == "completed"
+        recritique = asyncio.run(graph.recritique(result["run_id"]))
+        assert recritique["critique_gate"] in {"pass", "needs_rework", "escalate"}
     finally:
         asyncio.run(graph.aclose())
         graph.storage.close()

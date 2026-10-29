@@ -53,6 +53,7 @@ class CompanyState(TypedDict, total=False):
     design_contract: dict[str, Any]
     critique: dict[str, Any]
     critique_gate: str
+    tier_reviews: dict[str, Any]
     design_approved: bool
     human_decision: dict[str, Any]
     implementation: dict[str, Any]
@@ -125,13 +126,17 @@ class CompanyGraph:
         builder.add_node("target_ui", self._target_ui)
         builder.add_node("discovery", self._discovery)
         builder.add_node("synthesis", self._synthesis)
+        builder.add_node("discovery_lead_review", self._discovery_lead_review)
         builder.add_node("design_system", self._design_system)
         builder.add_node("visual_design", self._visual_design)
         builder.add_node("design_contract", self._design_contract)
+        builder.add_node("design_lead_review", self._design_lead_review)
         builder.add_node("critique", self._critique)
         builder.add_node("human_gate", self._human_gate)
+        builder.add_node("engineering_lead_review", self._engineering_lead_review)
         builder.add_node("implement", self._implement)
         builder.add_node("qa", self._qa)
+        builder.add_node("quality_lead_review", self._quality_lead_review)
         builder.add_node("manager_eval", self._manager_eval)
         builder.add_node("release", self._release)
         builder.add_node("learn", self._learn)
@@ -142,10 +147,12 @@ class CompanyGraph:
         builder.add_edge("ceo_review", "target_ui")
         builder.add_edge("target_ui", "discovery")
         builder.add_edge("discovery", "synthesis")
-        builder.add_edge("synthesis", "design_system")
+        builder.add_edge("synthesis", "discovery_lead_review")
+        builder.add_edge("discovery_lead_review", "design_system")
         builder.add_edge("design_system", "visual_design")
         builder.add_edge("visual_design", "design_contract")
-        builder.add_edge("design_contract", "critique")
+        builder.add_edge("design_contract", "design_lead_review")
+        builder.add_edge("design_lead_review", "critique")
         builder.add_conditional_edges(
             "critique",
             self._route_after_critique,
@@ -154,10 +161,12 @@ class CompanyGraph:
         builder.add_conditional_edges(
             "human_gate",
             self._route_after_human,
-            {"implement": "implement", "escalate": "escalate"},
+            {"implement": "engineering_lead_review", "escalate": "escalate"},
         )
+        builder.add_edge("engineering_lead_review", "implement")
         builder.add_edge("implement", "qa")
-        builder.add_edge("qa", "manager_eval")
+        builder.add_edge("qa", "quality_lead_review")
+        builder.add_edge("quality_lead_review", "manager_eval")
         builder.add_conditional_edges(
             "manager_eval",
             self._route_after_manager,
@@ -549,6 +558,117 @@ class CompanyGraph:
         await self._write(state, "research_findings.json", research, "ux_researcher")
         await self._event(state, "stage.completed", "Discovery complete", "chief_orchestrator")
         return {"research": research, "status": "synthesis"}
+
+    async def _lead_review(
+        self,
+        state: CompanyState,
+        role: str,
+        tier: int,
+        goal: str,
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        await self._event(state, "stage.started", f"Tier {tier} lead review", role)
+        result = await self._call(
+            state,
+            role,
+            goal,
+            {
+                **context,
+                "company_brief": self.registry.org_brief(),
+                "change_request": state.get("change_request", {}),
+                "routing_mode": state.get("mode"),
+            },
+        )
+        data = dict(result.data)
+        data.setdefault("tier", tier)
+        data.setdefault("status", "green")
+        await self._write(state, f"tier_{tier}_review.json", data, role)
+        await self._message(
+            state,
+            role,
+            "chief_orchestrator",
+            "review",
+            did=f"Tier {tier} review: {str(data.get('status', 'green')).upper()}",
+            doing=str(data.get("summary", "Tier review complete")),
+            needs=str(data.get("escalation_reason") or ""),
+            artifact=f"tier_{tier}_review.json",
+        )
+        await self._event(
+            state,
+            "gate.result",
+            f"Tier {tier} review: {data.get('status', 'green')}",
+            role,
+            {"gate": f"tier_{tier}_review", "status": data.get("status"), "review": data},
+        )
+        return data
+
+    async def _discovery_lead_review(self, state: CompanyState) -> dict[str, Any]:
+        data = await self._lead_review(
+            state,
+            "discovery_lead",
+            1,
+            "Review the Tier 1 discovery and IA outputs. Confirm the brief, evidence, Android constraints, flows, and state matrix are testable before design.",
+            {
+                "product_brief": state.get("change_request", {}),
+                "research": state.get("research", {}),
+                "synthesis": state.get("synthesis", {}),
+                "target_manifest": state.get("target_manifest", {}),
+            },
+        )
+        reviews = dict(state.get("tier_reviews", {}))
+        reviews["1"] = data
+        return {"tier_reviews": reviews, "status": "design_system"}
+
+    async def _design_lead_review(self, state: CompanyState) -> dict[str, Any]:
+        data = await self._lead_review(
+            state,
+            "design_lead",
+            2,
+            "Review the Tier 2 design system, visual spec, and design contract. Confirm target fidelity, token discipline, state coverage, and critique readiness.",
+            {
+                "design_tokens": state.get("design_tokens", {}),
+                "screen_spec": state.get("screen_spec", {}),
+                "design_contract": state.get("design_contract", {}),
+                "target_manifest": state.get("target_manifest", {}),
+            },
+        )
+        reviews = dict(state.get("tier_reviews", {}))
+        reviews["2"] = data
+        return {"tier_reviews": reviews, "status": "critique"}
+
+    async def _engineering_lead_review(self, state: CompanyState) -> dict[str, Any]:
+        data = await self._lead_review(
+            state,
+            "engineering_lead",
+            3,
+            "Review the implementation plan before code work. Confirm shared-file ownership, state model, tests, merge strategy, and verification commands.",
+            {
+                "design_contract": state.get("design_contract", {}),
+                "screen_spec": state.get("screen_spec", {}),
+                "implementation": state.get("implementation", {}),
+                "project": self.profile.project,
+            },
+        )
+        reviews = dict(state.get("tier_reviews", {}))
+        reviews["3"] = data
+        return {"tier_reviews": reviews, "status": "implement"}
+
+    async def _quality_lead_review(self, state: CompanyState) -> dict[str, Any]:
+        data = await self._lead_review(
+            state,
+            "quality_lead",
+            4,
+            "Review the QA evidence before manager evaluation. Confirm visual, functional, accessibility, and performance evidence is real and sufficient.",
+            {
+                "qa": state.get("qa", {}),
+                "screen_spec": state.get("screen_spec", {}),
+                "current_ui_manifest": load_current_manifest(self.settings, self.profile).model_dump(),
+                "target_manifest": state.get("target_manifest", {}),
+            },
+        )
+        reviews = dict(state.get("tier_reviews", {}))
+        reviews["4"] = data
+        return {"tier_reviews": reviews, "status": "evaluation"}
 
     async def _synthesis(self, state: CompanyState) -> dict[str, Any]:
         self._set_status(state, "synthesis")
@@ -979,10 +1099,13 @@ class CompanyGraph:
         mode = state.get("mode", "design")
         design_approved = bool(state.get("design_approved"))
         simulated = bool(state.get("demo"))
+        tier_reviews = state.get("tier_reviews", {})
+        lead_red = any(str(review.get("status", "green")).lower() == "red" for review in tier_reviews.values())
         if self._design_only(mode):
             deterministic = critique_gate == "pass" and design_approved
         else:
             deterministic = critique_gate == "pass" and design_approved and qa_gate == "pass"
+        deterministic = deterministic and not lead_red
         result = await self._call(
             state,
             "chief_orchestrator",
@@ -992,6 +1115,7 @@ class CompanyGraph:
                 "critique": state.get("critique", {}),
                 "qa": state.get("qa", {}),
                 "implementation": state.get("implementation", {}),
+                "tier_reviews": tier_reviews,
                 "mode": mode,
                 "demo": simulated,
                 "budget": self.storage.budget_summary(self.settings.monthly_token_budget),
@@ -999,9 +1123,16 @@ class CompanyGraph:
         )
         evaluation = dict(result.data)
         model_verdict = str(evaluation.get("verdict", "ESCALATE")).upper()
-        if deterministic:
+        if deterministic and not lead_red:
             gate = "pass"
             evaluation["verdict"] = "PASS"
+        elif deterministic and lead_red:
+            gate = "escalate"
+            evaluation["verdict"] = "ESCALATE"
+            evaluation["lead_veto"] = {
+                "reason": "One or more tier leads marked the work red.",
+                "reviews": tier_reviews,
+            }
         else:
             counts = dict(state.get("rework_counts", {}))
             if counts.get("implementation", 0) < self.settings.max_rework and mode != "design":
@@ -1268,6 +1399,76 @@ class CompanyGraph:
             self.storage.update_run(run_id, status="failed", state={**initial, "status": "failed", "error": error})
             await self.bus.publish(run_id, "run.failed", str(exc), "chief_orchestrator", error)
             return {**initial, "status": "failed", "error": error}
+
+    async def recritique(self, run_id: str, contract: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Re-run the independent critic against an edited design contract."""
+        await self._ensure_graph()
+        try:
+            snapshot = await self.graph.aget_state(self._config(run_id))
+            state = dict(snapshot.values or {})
+        except Exception:
+            state = {}
+        if not state:
+            run = self.storage.get_run(run_id)
+            if not run:
+                raise ValueError("run not found")
+            state = dict(run.get("state") or {})
+        if not state:
+            raise ValueError("run has no checkpoint state")
+        state["run_id"] = run_id
+        if contract is not None:
+            state["design_contract"] = contract
+        critique_update = await self._critique(state)
+        state.update(critique_update)
+        self.storage.update_run(run_id, status=str(state.get("status", "critique")), state=self._sanitize(state))
+        await self.bus.publish(
+            run_id,
+            "run.recritiqued",
+            f"Re-critique: {state.get('critique_gate')}",
+            "independent_design_critic",
+            {"critique_gate": state.get("critique_gate")},
+        )
+        return self._sanitize(state)
+
+    async def recheck_qa(self, run_id: str) -> dict[str, Any]:
+        """Re-run visual/functional QA for an existing run after new evidence is uploaded."""
+        await self._ensure_graph()
+        try:
+            snapshot = await self.graph.aget_state(self._config(run_id))
+            state = dict(snapshot.values or {})
+        except Exception:
+            state = {}
+        if not state:
+            run = self.storage.get_run(run_id)
+            if not run:
+                raise ValueError("run not found")
+            state = dict(run.get("state") or {})
+        if not state:
+            raise ValueError("run has no checkpoint state to re-check")
+        state["run_id"] = run_id
+        state["mode"] = "ship"
+        state["demo"] = False
+        implementation = dict(state.get("implementation") or {})
+        if implementation.get("status") == "skipped" or not implementation:
+            implementation["status"] = "provided"
+        state["implementation"] = implementation
+        qa_update = await self._qa(state)
+        state.update(qa_update)
+        eval_update = await self._manager_eval(state)
+        state.update(eval_update)
+        if eval_update.get("eval_gate") == "pass":
+            state.update(await self._release(state))
+        else:
+            state.update(await self._escalate(state))
+        self.storage.update_run(run_id, status=str(state.get("status", "completed")), state=self._sanitize(state))
+        await self.bus.publish(
+            run_id,
+            "run.rechecked",
+            f"QA re-check complete: {state.get('eval_gate')}",
+            "chief_orchestrator",
+            {"eval_gate": state.get("eval_gate"), "qa_gate": state.get("qa_gate")},
+        )
+        return self._sanitize(state)
 
     async def stop(self, run_id: str, reason: str = "Stopped by Dictator.") -> dict[str, Any]:
         pending = self.storage.pending_approval_for_run(run_id)

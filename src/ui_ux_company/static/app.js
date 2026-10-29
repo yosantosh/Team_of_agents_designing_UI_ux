@@ -16,6 +16,10 @@ const state = {
   messages: [],
   artifacts: [],
   currentManifest: null,
+  contract: null,
+  contractRunId: null,
+  contractVersions: [],
+  contractCritique: null,
   agentStatus: {},
   flowRunId: null,
   artifactRunId: null,
@@ -111,6 +115,11 @@ function switchTab(name) {
     setTimeout(drawFlowEdges, 40);
   }
   if (name === "artifacts") renderArtifactsTab();
+  if (name === "contract") {
+    if (!state.contractRunId) state.contractRunId = state.runId || state.runs[0]?.run_id || null;
+    renderContract();
+    if (state.contractRunId) loadContract(state.contractRunId, false);
+  }
   if (name === "target") renderTarget();
   if (name === "evolution") {
     if (!state.evolutionId) state.evolutionId = defaultEvolutionId();
@@ -720,6 +729,7 @@ function openAgentDetail(agentId) {
 // ------------------------------------------------------------------ approvals
 function approvalCard(approval, compact = false) {
   const options = (approval.options || []).map((option) => `<span class="chip">${escapeHtml(option.label)}</span>`).join("");
+  const overdue = approval.due_at && new Date(approval.due_at).getTime() < Date.now();
   return `
     <div class="approval-card">
       <div class="title">${escapeHtml(approval.title)}</div>
@@ -731,6 +741,7 @@ function approvalCard(approval, compact = false) {
       <div class="meta">
         <span>From: <b>${escapeHtml(approval.from_codename ? `${approval.from_codename} · ${agentById(approval.from_agent)?.title || approval.from_agent}` : agentLabel(approval.from_agent))}</b></span>
         ${approval.due_at ? `<span>Due: ${fmtTime(approval.due_at)}</span>` : ""}
+        ${overdue ? `<span class="badge failed">overdue</span>` : ""}
       </div>
       <div class="message">${escapeHtml(short(approval.message || "", compact ? 180 : 500))}</div>
       ${options && !compact ? `<div class="meta" style="margin-top:7px">${options}</div>` : ""}
@@ -962,6 +973,107 @@ async function previewArtifact(runId, name) {
   }
 }
 
+// ------------------------------------------------------------------ design contract
+function fillContractSelect(selected) {
+  const select = $("contract-run-select");
+  if (!select) return;
+  const runs = state.runs || [];
+  select.innerHTML = "";
+  if (!runs.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "No production runs";
+    select.appendChild(option);
+    return;
+  }
+  for (const run of runs) {
+    const option = document.createElement("option");
+    option.value = run.run_id;
+    option.textContent = `${run.status} · ${short(run.prompt, 70)}`;
+    if (run.run_id === selected) option.selected = true;
+    select.appendChild(option);
+  }
+  if (selected) select.value = selected;
+}
+
+function renderContract() {
+  fillContractSelect(state.contractRunId || state.runId);
+  const editor = $("contract-editor");
+  if (state.contract) {
+    editor.value = JSON.stringify(state.contract, null, 2);
+    $("contract-status").textContent = `Run ${state.contractRunId} · ${state.contractVersions.length} version(s)`;
+  } else {
+    $("contract-status").textContent = state.contractRunId ? `No contract loaded for ${state.contractRunId}` : "Select a run with a design contract.";
+  }
+  $("contract-versions").innerHTML = state.contractVersions.length ? state.contractVersions.map((version) => `
+    <div class="item"><div class="title">${escapeHtml(version.name)}</div><div class="meta">${fmtTime(version.created_at)} · ${escapeHtml(short(version.sha256, 16))}</div></div>
+  `).join("") : `<div class="muted">No versions yet.</div>`;
+  const critique = $("contract-critique");
+  if (state.contractCritique) {
+    critique.innerHTML = `<h3 style="font-size:12px;margin-bottom:8px">Latest critique</h3><pre>${escapeHtml(JSON.stringify(state.contractCritique, null, 2))}</pre>`;
+  } else {
+    critique.innerHTML = `<div class="muted">No critique loaded for this contract.</div>`;
+  }
+}
+
+async function loadContract(runId, notify = false) {
+  if (!runId) return;
+  state.contractRunId = runId;
+  try {
+    const data = await api(`/api/runs/${encodeURIComponent(runId)}/design-contract`);
+    state.contract = data.contract;
+    state.contractVersions = data.versions || [];
+    state.contractCritique = null;
+    renderContract();
+    try {
+      const critique = await fetch(`/api/artifacts/${encodeURIComponent(runId)}/design_critique.json`);
+      if (critique.ok) state.contractCritique = JSON.parse(await critique.text());
+    } catch { /* ignore */ }
+    renderContract();
+    if (notify) toast(`Loaded contract for ${runId}.`);
+  } catch (error) {
+    state.contract = null;
+    state.contractVersions = [];
+    state.contractCritique = null;
+    renderContract();
+    if (notify || !String(error.message).includes("404")) toast(`Contract load error: ${error.message}`, "error");
+  }
+}
+
+async function saveContract() {
+  if (!state.contractRunId) { toast("Select a run first.", "error"); return; }
+  try {
+    const contract = JSON.parse($("contract-editor").value);
+    const result = await api(`/api/runs/${encodeURIComponent(state.contractRunId)}/design-contract`, {
+      method: "PUT",
+      body: JSON.stringify({ contract }),
+    });
+    state.contract = contract;
+    toast(`Design contract v${result.version} saved.`);
+    await loadContract(state.contractRunId, false);
+  } catch (error) {
+    toast(`Contract save error: ${error.message}`, "error");
+  }
+}
+
+async function recritiqueContract() {
+  if (!state.contractRunId) { toast("Select a run first.", "error"); return; }
+  const button = $("contract-recrtique");
+  button.disabled = true;
+  button.textContent = "Re-running critic…";
+  try {
+    const result = await api(`/api/runs/${encodeURIComponent(state.contractRunId)}/recritique`, { method: "POST" });
+    state.contractCritique = result.critique || result;
+    toast("Critique re-run complete.");
+    await loadContract(state.contractRunId, false);
+  } catch (error) {
+    toast(`Re-critique error: ${error.message}`, "error");
+  } finally {
+    button.disabled = false;
+    button.textContent = "Re-run critique";
+  }
+}
+
 // ------------------------------------------------------------------ evolution
 function fillEvolutionSelect(selected) {
   const select = $("evolution-select");
@@ -1138,6 +1250,13 @@ function renderEvolution() {
       status: has("evolution.applied") || status === "applied" ? "completed" : "idle",
       output: record.applied_version ? `Registry ${record.applied_version}` : "No registry change yet.",
     },
+    {
+      id: "canary",
+      label: "Canary",
+      name: "Scope canary",
+      status: ["applied", "approved", "rolled_back"].includes(status) ? "completed" : "idle",
+      output: status === "rolled_back" ? "Rolled back." : "Review the next N runs on one pod/screen; rollback is available.",
+    },
   ];
   $("evolution-cards").innerHTML = stageData.map((stage) => `
     <div class="evolution-card ${statusClass(stage.status)}" data-evolution-stage="${escapeHtml(stage.id)}">
@@ -1176,12 +1295,14 @@ function renderEvolution() {
           <button class="btn danger small" id="evolution-reject">Reject</button>
           <button class="btn ghost small" id="evolution-dictate">Dictate</button>
         ` : ""}
+        ${["applied", "approved"].includes(status) ? `<button class="btn danger small" id="evolution-rollback">Rollback registry</button>` : ""}
         <button class="btn ghost small" id="evolution-stop-inline" ${terminal ? "disabled" : ""}>Stop</button>
       </div>
     `;
     $("evolution-approve")?.addEventListener("click", () => decideEvolution("approve"));
     $("evolution-reject")?.addEventListener("click", () => decideEvolution("reject"));
     $("evolution-dictate")?.addEventListener("click", openEvolutionDictate);
+    $("evolution-rollback")?.addEventListener("click", rollbackEvolution);
     $("evolution-stop-inline")?.addEventListener("click", stopEvolution);
   }
   const eventList = $("evolution-events");
@@ -1216,6 +1337,18 @@ function openEvolutionOutput(stageId, stageData) {
     <pre>${escapeHtml(JSON.stringify(state.evolution?.proposal?.proposal || {}, null, 2))}</pre>
   `;
   openModal(stage?.name || "Evolution stage", stage?.label || "", body);
+}
+
+async function rollbackEvolution() {
+  if (!state.evolutionId) return;
+  try {
+    const result = await api(`/api/evolve/${encodeURIComponent(state.evolutionId)}/rollback`, { method: "POST" });
+    toast(`Registry rolled back to ${result.rolled_back_to}.`);
+    await loadEvolution(state.evolutionId, false);
+    await poll();
+  } catch (error) {
+    toast(`Rollback error: ${error.message}`, "error");
+  }
 }
 
 async function stopEvolution() {
@@ -1428,7 +1561,29 @@ $("open-evolution").addEventListener("click", () => switchTab("evolution"));
 $("flow-run-select").addEventListener("change", (event) => { loadRun(event.target.value, true); });
 $("flow-refresh").addEventListener("click", () => { if (state.flowRunId) loadRun(state.flowRunId, true); });
 $("artifact-run-select").addEventListener("change", (event) => { loadArtifactsForRun(event.target.value); });
+$("contract-run-select").addEventListener("change", (event) => { if (event.target.value) loadContract(event.target.value, true); });
+$("contract-refresh").addEventListener("click", () => { if (state.contractRunId) loadContract(state.contractRunId, true); });
+$("contract-save").addEventListener("click", saveContract);
+$("contract-recrtique").addEventListener("click", recritiqueContract);
 $("upload-screenshots").addEventListener("click", () => $("screenshot-input").click());
+$("recheck-qa").addEventListener("click", async () => {
+  const runId = state.artifactRunId || state.runId;
+  if (!runId) { toast("Select a run first.", "error"); return; }
+  const button = $("recheck-qa");
+  button.disabled = true;
+  button.textContent = "Re-running QA…";
+  try {
+    await api(`/api/runs/${encodeURIComponent(runId)}/recheck-qa`, { method: "POST" });
+    toast("QA re-check complete.");
+    await loadRun(runId, false);
+    await poll();
+  } catch (error) {
+    toast(`QA re-check error: ${error.message}`, "error");
+  } finally {
+    button.disabled = false;
+    button.textContent = "Re-run QA";
+  }
+});
 $("screenshot-input").addEventListener("change", async (event) => {
   const runId = state.artifactRunId || state.runId;
   if (!runId || !event.target.files.length) return;

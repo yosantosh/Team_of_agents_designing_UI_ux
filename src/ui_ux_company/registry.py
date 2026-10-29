@@ -227,6 +227,35 @@ class Registry:
         lines.append('  artifacts --> Dictator')
         return "\n".join(lines)
 
+    def rollback(self, proposal_id: str) -> dict[str, Any]:
+        """Restore the registry version recorded as the 'from' version of an applied proposal."""
+        history = self.data.get("evolution_history", [])
+        entry = next((item for item in reversed(history) if item.get("proposal_id") == proposal_id), None)
+        if not entry:
+            raise ValueError("no applied registry change found for this proposal")
+        from_version = str(entry.get("from_version") or "")
+        backup = self.path.parent / "registry_history" / f"{from_version}.yaml"
+        if not backup.exists():
+            raise ValueError(f"registry backup not found: {backup}")
+        backup_data = load_yaml(backup)
+        current_version = self.version
+        # Keep an audit trail of the rollback itself.
+        history = list(self.data.get("evolution_history", []))
+        history.append(
+            {
+                "proposal_id": proposal_id,
+                "type": "rollback",
+                "applied_at": utcnow(),
+                "from_version": current_version,
+                "to_version": from_version,
+            }
+        )
+        backup_data["evolution_history"] = history
+        self.data = backup_data
+        self._enrich()
+        save_yaml(self.path, self.data)
+        return {"proposal_id": proposal_id, "rolled_back_to": from_version, "previous_version": current_version}
+
     def apply_safe_changes(self, changes: list[dict[str, Any]], proposal_id: str) -> dict[str, Any]:
         """Apply only low-risk registry mutations; leave the live graph rebuild to deployment.
 
