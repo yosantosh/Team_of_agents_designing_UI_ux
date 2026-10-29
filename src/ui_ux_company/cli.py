@@ -85,20 +85,23 @@ def demo(
         gateway=gateway,
         agents=agents,
     )
-    try:
-        result = asyncio.run(
-            company.run(
+    async def _execute():
+        try:
+            return await company.run(
                 prompt,
                 mode="design",
                 demo=True,
                 auto_approve=True,
                 backend="mock",
             )
-        )
+        finally:
+            await company.aclose()
+
+    try:
+        result = asyncio.run(_execute())
         _print_summary(result, artifacts=artifacts)
         console.print("\n[dim]Mock demo only. Real QA requires screenshots and the emulator/ADB capture harness.[/dim]")
     finally:
-        asyncio.run(company.aclose())
         storage.close()
 
 
@@ -125,9 +128,9 @@ def run(
         gateway=gateway,
         agents=agents,
     )
-    try:
-        result = asyncio.run(
-            company.run(
+    async def _execute():
+        try:
+            result = await company.run(
                 prompt,
                 mode=mode,
                 auto_approve=auto_approve,
@@ -135,17 +138,21 @@ def run(
                 demo=demo,
                 backend=backend,
             )
-        )
-        _print_summary(result, artifacts=artifacts)
-        while result.get("__interrupt__"):
-            interrupt_value = result["__interrupt__"][0]["value"]
-            console.print(Panel(json.dumps(interrupt_value, indent=2, default=str), title="Dictator inbox"))
-            choice = typer.prompt("Decision (approve/reject/override)", default="approve")
-            decision = {"decision": choice, "notes": typer.prompt("Optional note", default="")}
-            result = asyncio.run(company.resume(result["run_id"], decision))
             _print_summary(result, artifacts=artifacts)
+            while result.get("__interrupt__"):
+                interrupt_value = result["__interrupt__"][0]["value"]
+                console.print(Panel(json.dumps(interrupt_value, indent=2, default=str), title="Dictator inbox"))
+                choice = typer.prompt("Decision (approve/reject/override)", default="approve")
+                decision = {"decision": choice, "notes": typer.prompt("Optional note", default="")}
+                result = await company.resume(result["run_id"], decision)
+                _print_summary(result, artifacts=artifacts)
+            return result
+        finally:
+            await company.aclose()
+
+    try:
+        asyncio.run(_execute())
     finally:
-        asyncio.run(company.aclose())
         storage.close()
 
 
@@ -247,19 +254,25 @@ def evolve(
         gateway=gateway,
         agents=agents,
     )
+    async def _execute():
+        try:
+            result = await engine.start(focus=focus, auto_approve=auto_approve, backend=backend)
+            console.print(Panel(json.dumps(result.get("proposal", result), indent=2, default=str), title="Evolution proposal"))
+            if result.get("evaluation"):
+                console.print(Panel(json.dumps(result["evaluation"], indent=2, default=str), title="Evaluation"))
+            while result.get("__interrupt__"):
+                interrupt_value = result["__interrupt__"][0]["value"]
+                console.print(Panel(json.dumps(interrupt_value, indent=2, default=str), title="Approve evolution"))
+                choice = typer.prompt("Decision (approve/reject)", default="approve")
+                result = await engine.resume(result["proposal_id"], {"decision": choice})
+                console.print(Panel(json.dumps(result, indent=2, default=str), title="Evolution result"))
+            return result
+        finally:
+            await engine.aclose()
+
     try:
-        result = asyncio.run(engine.start(focus=focus, auto_approve=auto_approve, backend=backend))
-        console.print(Panel(json.dumps(result.get("proposal", result), indent=2, default=str), title="Evolution proposal"))
-        if result.get("evaluation"):
-            console.print(Panel(json.dumps(result["evaluation"], indent=2, default=str), title="Evaluation"))
-        while result.get("__interrupt__"):
-            interrupt_value = result["__interrupt__"][0]["value"]
-            console.print(Panel(json.dumps(interrupt_value, indent=2, default=str), title="Approve evolution"))
-            choice = typer.prompt("Decision (approve/reject)", default="approve")
-            result = asyncio.run(engine.resume(result["proposal_id"], {"decision": choice}))
-            console.print(Panel(json.dumps(result, indent=2, default=str), title="Evolution result"))
+        asyncio.run(_execute())
     finally:
-        asyncio.run(engine.aclose())
         storage.close()
 
 

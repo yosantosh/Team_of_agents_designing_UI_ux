@@ -17,7 +17,6 @@ class EventBus:
     def __init__(self, storage: Storage):
         self.storage = storage
         self._subscribers: dict[str, set[asyncio.Queue[dict[str, Any]]]] = defaultdict(set)
-        self._lock = asyncio.Lock()
 
     async def publish(
         self,
@@ -28,8 +27,8 @@ class EventBus:
         data: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         event = self.storage.add_event(run_id, event_type, message, agent_id, data)
-        async with self._lock:
-            queues = list(self._subscribers.get(run_id, set()))
+        # Single-threaded event loop: set copy/add/discard is safe without a lock.
+        queues = list(self._subscribers.get(run_id, set()))
         for queue in queues:
             try:
                 queue.put_nowait(event)
@@ -52,8 +51,7 @@ class EventBus:
             after_id = int(event["id"])
 
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=256)
-        async with self._lock:
-            self._subscribers[run_id].add(queue)
+        self._subscribers[run_id].add(queue)
         try:
             while True:
                 event = await queue.get()
@@ -62,5 +60,4 @@ class EventBus:
                 after_id = int(event["id"])
                 yield event
         finally:
-            async with self._lock:
-                self._subscribers[run_id].discard(queue)
+            self._subscribers[run_id].discard(queue)

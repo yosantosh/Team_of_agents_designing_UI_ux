@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from pathlib import Path
@@ -92,16 +93,23 @@ class CompanyGraph:
         self.checkpointer = None
         self._checkpointer_cm = None
         self.graph = None
+        self._init_lock: asyncio.Lock | None = None
 
     async def _ensure_graph(self) -> None:
         if self.graph is not None:
             return
-        if self.settings.durable_checkpoints:
-            self._checkpointer_cm = AsyncSqliteSaver.from_conn_string(str(self.settings.checkpoint_db))
-            self.checkpointer = await self._checkpointer_cm.__aenter__()
-        else:
-            self.checkpointer = MemorySaver()
-        self.graph = self._build()
+        if self._init_lock is None:
+            self._init_lock = asyncio.Lock()
+        async with self._init_lock:
+            if self.graph is not None:
+                return
+            if self.settings.durable_checkpoints:
+                self._checkpointer_cm = AsyncSqliteSaver.from_conn_string(str(self.settings.checkpoint_db))
+                self.checkpointer = await self._checkpointer_cm.__aenter__()
+            else:
+                self.checkpointer = MemorySaver()
+            self.graph = self._build()
+            self._init_lock = None
 
     # ------------------------------------------------------------------ graph
     def _build(self):
