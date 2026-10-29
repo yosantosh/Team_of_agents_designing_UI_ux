@@ -430,7 +430,7 @@ function renderOrgSummary() {
       <div class="tier-name">T${tier} · ${escapeHtml(tierMeta[Number(tier)] || "")}</div>
       <div class="chips">
         ${agents.map((agent) => {
-          const status = state.agentStatus[agent.id] || (agent.enabled ? "idle" : "disabled");
+          const status = state.agentStatus[agent.id] || "idle";
           return `<span class="chip ${status === "running" ? "active" : ""}" title="${escapeHtml(agent.mission || "")}">${escapeHtml(agent.title || agent.id)}</span>`;
         }).join("")}
       </div>
@@ -638,7 +638,7 @@ async function loadHistoryEvolution(proposalId) {
 function deriveAgentStatus() {
   const statuses = {};
   for (const agent of state.registry?.registry?.agents || []) {
-    statuses[agent.id] = agent.enabled ? "idle" : "disabled";
+    statuses[agent.id] = "idle";
   }
   for (const event of state.events || []) {
     if (!event.agent_id) continue;
@@ -668,13 +668,13 @@ function deriveAgentStatus() {
   }
   if (runStatus === "stopped" || runStatus === "cancelled") {
     for (const [id, status] of Object.entries(statuses)) {
-      if (status === "running") statuses[id] = "stopped";
+      if (status === "running") statuses[id] = "idle";
     }
-    statuses.dictator = "stopped";
+    statuses.dictator = "idle";
   }
   if (runStatus === "escalated") {
     for (const [id, status] of Object.entries(statuses)) {
-      if (status === "running") statuses[id] = "stopped";
+      if (status === "running") statuses[id] = "idle";
     }
     statuses.dictator = "waiting";
   }
@@ -713,7 +713,7 @@ function handleRunEvent(event) {
 }
 
 // ------------------------------------------------------------------ flow
-const FLOW_ICONS = { idle: "○", running: "◌", completed: "✓", failed: "✕", waiting: "⏸", stopped: "■", disabled: "–" };
+const FLOW_ICONS = { idle: "○", running: "◌", completed: "✓", failed: "✕", waiting: "⏸" };
 
 function renderFlow() {
   const registry = state.registry?.registry;
@@ -727,18 +727,18 @@ function renderFlow() {
   });
   const tierMeta = Object.fromEntries((registry.tiers || []).map((t) => [Number(t.id), t.name]));
   const statusFor = (agentId) => {
-    const agent = agentById(agentId);
-    if (!state.run) return agent?.enabled === false ? "disabled" : "idle";
-    return state.agentStatus[agentId] || (agent?.enabled === false ? "disabled" : "idle");
+    if (!state.run) return "idle";
+    const status = state.agentStatus[agentId] || "idle";
+    return ["running", "completed", "waiting", "failed"].includes(status) ? status : "idle";
   };
   const nodeHtml = (agent, extraClass = "") => {
     const status = statusFor(agent.id);
     const work = currentWork(agent.id);
     return `
-      <div class="flow-node ${extraClass} status-${status}" data-node-id="${escapeHtml(agent.id)}" title="${escapeHtml(agent.mission || "")}">
+      <div class="flow-node ${extraClass} ${agent.enabled ? "" : "agent-off"} status-${status}" data-node-id="${escapeHtml(agent.id)}" title="${escapeHtml(agent.mission || "")}">
         <span class="node-icon">${FLOW_ICONS[status] || "○"}</span>
         <div class="node-title">${escapeHtml(agent.codename || "")} · ${escapeHtml(agent.title || agent.id)}</div>
-        <div class="node-sub">${escapeHtml(agent.model || "")} · ${agent.enabled ? status : "on-demand"}</div>
+        <div class="node-sub">${escapeHtml(agent.model || "")} · ${status}</div>
         ${work ? `<div class="node-work">${escapeHtml(work)}</div>` : ""}
       </div>
     `;

@@ -338,7 +338,7 @@ The registry is the authoritative list. These are the enabled MVP agents:
 | `release_manager` | 4 | Android Release Manager | RC, staged rollout, monitoring, rollback, notes. | release |
 | `org_evolution_auditor` | 5 | Independent Operating Model Auditor | Metrics-backed evolution proposal; cannot approve/apply. | evolution approval |
 
-### 5.3 Extended / on-demand roster
+### 5.3 Extended roster
 
 `content_designer`, `accessibility_specialist`, `localization_specialist`, `component_design_engineer`, `motion_haptics_designer`, `brand_illustration_designer`, `android_tech_lead`, `design_engineer`, `motion_shader_engineer`, `performance_qa`, `security_privacy_reviewer`, `trust_safety_reviewer`, `analytics_experimentation_lead`, `design_ops_librarian`, `eval_red_team`.
 
@@ -772,7 +772,7 @@ A dependency-free SPA served by FastAPI:
 The SPA uses a narrow left icon rail (labels on hover) and tabs:
 
 - **Overview** — decree composer, recent runs, live timeline, compact org summary, quick approvals, token budget, quick artifacts, Target_ui mini-preview, evolution quick list.
-- **Live Flow** — full-page hierarchical graph with CEO/Chief/tier leads/specialists, codenames A1–A36, idle/running/completed/stopped/error/waiting icons, current work labels, thin colored signal lines, company feed, live SSE events, zoom controls, and click-through agent detail. Terminal run states clamp every running node to completed/stopped/failed so no stale “running” indicator survives a stop.
+- **Live Flow** — full-page hierarchical graph with CEO/Chief/tier leads/specialists, codenames A1–A36, five status categories: **Idle, Running, Completed, Waiting, Error**; current work labels, thin colored signal lines, company feed, live SSE events, zoom controls, and click-through agent detail. Terminal runs clear their live context; History restores them.
 - **Approvals** — sub-tabs for Pending and Decision history; source agent/codename, due time, overdue badge, approve/reject/dictate. Approvals attached to terminal runs are auto-dismissed into history at startup.
 - **Artifacts** — run selector, artifact list, JSON/text/image preview, screenshot upload, and Re-run QA (reuses the existing run; no design rerun).
 - **Contract** — versioned design-contract editor with Save version and Re-run critique.

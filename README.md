@@ -86,7 +86,7 @@ flowchart LR
 The SPA is a narrow left icon rail plus tabs:
 
 - **Overview** — decree composer, recent runs, live timeline, compact org summary, approvals, budget, artifacts, Target_ui preview, evolution quick list.
-- **Live Flow** — full-page hierarchical graph with CEO/Chief/tier leads/specialists, codenames A1–A36, idle/running/completed/stopped/error/waiting icons, current work labels, thin colored signal lines, company feed, zoom controls, and click-through agent detail. Terminal runs clamp running nodes to completed/stopped/failed.
+- **Live Flow** — full-page hierarchical graph with CEO/Chief/tier leads/specialists, codenames A1–A36, five status categories: **Idle, Running, Completed, Waiting, Error**; current work labels, thin colored signal lines, company feed, zoom controls, and click-through agent detail. Terminal runs clear their live context; use History to restore.
 - **Approvals** — sub-tabs for **Pending** and **Decision history**; source agent/codename, due time, overdue badge, approve/reject/dictate, and a **View proposal** link for evolution approvals. Stale escalations from terminal runs are auto-dismissed into history.
 - **Artifacts** — run selector, preview, screenshot upload, Re-run QA.
 - **Contract** — versioned design-contract editor with Save version and Re-run critique.
