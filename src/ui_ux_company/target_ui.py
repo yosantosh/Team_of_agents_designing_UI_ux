@@ -172,6 +172,8 @@ async def analyze_manifest(
             image.status = "low_confidence"
             image.conflicts.append(f"analysis_failed: {exc}")
     manifest.status = "analyzed"
+    manifest.notes = [note for note in manifest.notes if "analyze_manifest" not in note]
+    manifest.notes.append("Vision analysis complete. Confidence and conflicts are recorded per image.")
     return manifest
 
 
