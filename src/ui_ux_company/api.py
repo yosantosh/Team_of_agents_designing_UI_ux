@@ -26,6 +26,7 @@ from .evolution import EvolutionEngine
 from .evals import LANES, EvalHarness, load_golden_tasks
 from .gateway import ModelGateway
 from .graph import CompanyGraph
+from .langfuse_trace import LangfuseTracer
 from .models import ApprovalDecision, EvolutionRequest, RunRequest, new_id
 from .notifications import Notifier
 from .project_validation import validate_android_project
@@ -124,8 +125,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     bus = EventBus(storage, Notifier(settings))
     artifacts = ArtifactStore(settings, storage)
     rollback_service = RollbackService(settings, storage, artifacts)
+    tracer = LangfuseTracer(settings)
     gateway = ModelGateway(settings, registry, storage)
-    agents = AgentRunner(gateway, registry)
+    agents = AgentRunner(gateway, registry, tracer=tracer)
     company = CompanyGraph(
         settings,
         registry=registry,
@@ -136,8 +138,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         artifacts=artifacts,
         gateway=gateway,
         agents=agents,
+        tracer=tracer,
     )
-    eval_harness = EvalHarness(settings, storage, company, profile)
+    eval_harness = EvalHarness(settings, storage, company, profile, tracer=tracer)
     evolution = EvolutionEngine(
         settings,
         registry=registry,
@@ -146,6 +149,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         artifacts=artifacts,
         gateway=gateway,
         agents=agents,
+        tracer=tracer,
     )
 
     @asynccontextmanager
@@ -153,12 +157,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         yield
         await company.aclose()
         await evolution.aclose()
+        tracer.shutdown()
         storage.close()
 
     app = FastAPI(
         title="UI/UX Agentic Company",
         version="0.1.0",
-        description="LangGraph control plane, OpenCode model gateway, Target_ui ingestion, evolution loop, and Dictator control room.",
+        description="LangGraph control plane, OpenCode model gateway, Target_ui ingestion, company improvement, Langfuse observability, and Dictator control room.",
         lifespan=lifespan,
     )
     app.add_middleware(
@@ -180,6 +185,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.eval_tasks: dict[str, asyncio.Task] = {}
     app.state.company = company
     app.state.evolution = evolution
+    app.state.tracer = tracer
     app.state.tasks = set()
     app.state.run_tasks: dict[str, asyncio.Task] = {}
     app.state.evolution_tasks: dict[str, asyncio.Task] = {}
@@ -270,14 +276,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "project_dir": str(settings.project_dir or profile.project.get("repo") or ""),
             "target_ui_dir": str(settings.target_ui_path),
             "current_ui_dir": str(settings.current_ui_path),
-            "current_ui_dir": str(settings.current_ui_path),
             "project_validation": _project_validation(),
             "autonomy_level": settings.autonomy_level,
             "governance": profile.autonomy.get("governance", {}),
             "budget": storage.budget_summary(settings.monthly_token_budget),
             "roborezzi": False,
             "visual_qa_backend": profile.visual_qa.get("backend", "emulator_adb"),
+            "langfuse": tracer.summary(),
         }
+
+    @app.get("/api/langfuse/health")
+    async def langfuse_health(refresh: bool = False):
+        return await asyncio.to_thread(tracer.health)
+
+    @app.post("/api/langfuse/check")
+    async def langfuse_check():
+        return await asyncio.to_thread(tracer.health)
 
     @app.post("/api/auth/login")
     async def auth_login(request: AuthLogin):
@@ -718,6 +732,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.run_tasks[run_id] = task
         return {"run_id": run_id, "status": "queued", "events_url": f"/api/runs/{run_id}/events"}
 
+    def _with_trace(values: Any) -> Any:
+        if not isinstance(values, dict):
+            return values
+        trace_id = values.get("langfuse_trace_id")
+        if trace_id and not values.get("langfuse_trace_url"):
+            url = tracer.trace_url(str(trace_id))
+            if url:
+                values["langfuse_trace_url"] = url
+        return values
+
     def _contract_versions(run_id: str) -> list[dict[str, Any]]:
         artifacts = storage.list_artifacts(run_id)
         return [
@@ -828,8 +852,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def rollback_run(run_id: str, request: RunRollbackRequest):
         if not request.confirm:
             raise HTTPException(status_code=400, detail="rollback requires confirm=true")
+        run = storage.get_run(run_id) or {}
+        trace_id = (run.get("state") or {}).get("langfuse_trace_id")
         try:
-            result = rollback_service.execute(run_id, request.mode, confirm=True)
+            with tracer.span(
+                "rollback",
+                as_type="tool",
+                input={"run_id": run_id, "mode": request.mode},
+                metadata={"run_id": run_id},
+                trace_id=trace_id,
+            ) as span:
+                result = rollback_service.execute(run_id, request.mode, confirm=True)
+                tracer.update_span(
+                    span,
+                    output={
+                        "action": result.get("action"),
+                        "branch": result.get("branch"),
+                        "commits": result.get("commits"),
+                    },
+                    level="ERROR" if result.get("action") in {"none", "failed"} else None,
+                )
         except RollbackError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         await bus.publish(run_id, "run.rollback", f"Code rolled back ({result.get('action')})", "dictator", result)
@@ -852,7 +894,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/runs")
     async def list_runs(limit: int = 50):
-        return {"runs": storage.list_runs(limit)}
+        runs = storage.list_runs(limit)
+        for run in runs:
+            _with_trace(run.get("state"))
+        return {"runs": runs}
 
     @app.get("/api/evals/tasks")
     async def eval_tasks():
@@ -860,7 +905,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/evals/experiments")
     async def eval_experiments(limit: int = 50):
-        return {"experiments": storage.list_eval_experiments(limit)}
+        experiments = storage.list_eval_experiments(limit)
+        for experiment in experiments:
+            langfuse = (experiment.get("metrics") or {}).get("langfuse") or {}
+            experiment["langfuse_experiment_id"] = langfuse.get("experiment_id")
+            experiment["langfuse_experiment_url"] = langfuse.get("experiment_url")
+            experiment["langfuse_dataset"] = (langfuse.get("dataset") or {}).get("name")
+            experiment["langfuse_status"] = langfuse.get("status")
+        return {"experiments": experiments}
 
     @app.get("/api/evals/experiments/{experiment_id}")
     async def eval_experiment(experiment_id: str):
@@ -902,6 +954,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "created_at": run.get("created_at"),
                     "mode": run.get("mode"),
                     "project_id": state.get("project_id") if isinstance(state, dict) else None,
+                    "langfuse_trace_id": state.get("langfuse_trace_id") if isinstance(state, dict) else None,
+                    "langfuse_trace_url": (
+                        state.get("langfuse_trace_url")
+                        or tracer.trace_url(str(state.get("langfuse_trace_id") or ""))
+                    ) if isinstance(state, dict) else None,
                     "has_code": (
                         not (isinstance(state, dict) and state.get("rollback"))
                         and (
@@ -916,9 +973,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         for proposal in storage.list_evolutions(limit):
             prop = proposal.get("proposal") or {}
-            title = proposal.get("title") or "Evolution"
-            if proposal.get("status") == "stopped" and title in {"Evolution audit running", "Evolution audit starting"}:
-                title = "Evolution stopped before proposal"
+            title = proposal.get("title") or "Improvement"
+            if proposal.get("status") == "stopped" and title in {"Evolution audit running", "Evolution audit starting", "Improvement audit running", "Improvement audit starting"}:
+                title = "Improvement stopped before proposal"
+            trace_id = prop.get("langfuse_trace_id")
             items.append(
                 {
                     "kind": "evolution",
@@ -926,8 +984,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "title": title,
                     "status": proposal.get("status"),
                     "created_at": proposal.get("created_at"),
-                    "mode": "evolution",
+                    "mode": "improvement",
                     "project_id": prop.get("project_id"),
+                    "langfuse_trace_id": trace_id,
+                    "langfuse_trace_url": prop.get("langfuse_trace_url") or tracer.trace_url(trace_id),
                 }
             )
         items.sort(key=lambda item: item.get("created_at") or "", reverse=True)
@@ -939,6 +999,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not run:
             raise HTTPException(status_code=404, detail="run not found")
         state = await company.get_state(run_id)
+        _with_trace(run.get("state"))
+        _with_trace((state or {}).get("values") if isinstance(state, dict) else None)
         return {
             "run": run,
             "state": state,

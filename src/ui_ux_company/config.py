@@ -110,6 +110,15 @@ class Settings:
     s3_secret_key: str = ""
     s3_region: str = "us-east-1"
     durable_checkpoints: bool = True
+    langfuse_enabled: bool = False
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_base_url: str = "http://127.0.0.1:3000"
+    langfuse_environment: str = "local"
+    langfuse_dataset: str = "uiux-golden-tasks"
+    langfuse_project_id: str = ""
+    langfuse_timeout: int = 5
+    langfuse_eval_timeout: int = 30
 
     @classmethod
     def from_env(cls, root: Path | None = None) -> "Settings":
@@ -172,6 +181,15 @@ class Settings:
             s3_secret_key=os.getenv("UIUX_S3_SECRET_KEY", ""),
             s3_region=os.getenv("UIUX_S3_REGION", "us-east-1"),
             durable_checkpoints=_bool("UIUX_DURABLE_CHECKPOINTS", True),
+            langfuse_enabled=_bool("LANGFUSE_ENABLED", False),
+            langfuse_public_key=os.getenv("LANGFUSE_PUBLIC_KEY", ""),
+            langfuse_secret_key=os.getenv("LANGFUSE_SECRET_KEY", ""),
+            langfuse_base_url=os.getenv("LANGFUSE_BASE_URL", "http://127.0.0.1:3000"),
+            langfuse_environment=os.getenv("LANGFUSE_TRACING_ENVIRONMENT", "local"),
+            langfuse_dataset=os.getenv("LANGFUSE_DATASET", "uiux-golden-tasks"),
+            langfuse_project_id=os.getenv("LANGFUSE_PROJECT_ID", ""),
+            langfuse_timeout=_int("LANGFUSE_TIMEOUT", 5),
+            langfuse_eval_timeout=_int("LANGFUSE_EVAL_TIMEOUT", 30),
         )
         settings.ensure_dirs()
         load_runtime_settings(settings)

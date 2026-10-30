@@ -61,6 +61,9 @@ def test_api_health_and_registry(settings):
         eval_experiments = client.get("/api/evals/experiments")
         assert eval_experiments.status_code == 200
         assert "experiments" in eval_experiments.json()
+        langfuse = client.get("/api/langfuse/health")
+        assert langfuse.status_code == 200
+        assert langfuse.json()["status"] == "disabled"
         root = client.get("/")
         assert root.status_code == 200
         flow = client.get("/flow")

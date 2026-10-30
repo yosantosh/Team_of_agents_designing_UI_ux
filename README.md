@@ -1,8 +1,8 @@
 # UI/UX Agent Company
 
-A **LangGraph + LangSmith + OpenCode** agent company for native Android social-app UI/UX design, implementation, QA, maintenance, and organizational evolution.
+A **LangGraph + Langfuse + OpenCode** agent company for native Android social-app UI/UX design, implementation, QA, maintenance, and company improvement.
 
-The Dictator (you) issues a decree. The company classifies it, runs discovery, designs, critiques itself, pauses for your approval, plans the Compose implementation, runs QA, and assembles a release candidate. A separate evolution graph proposes improvements to the company itself — with a shadow evaluation, your approval, and rollback.
+The Dictator (you) issues a decree. The company classifies it, runs discovery, designs, critiques itself, pauses for your approval, plans the Compose implementation, runs QA, and assembles a release candidate. A separate improvement graph proposes improvements to the company itself — with a shadow evaluation, your approval, and rollback.
 
 **Read the constitution:** [`ui_ux-agent_company.md`](ui_ux-agent_company.md)
 
@@ -39,6 +39,36 @@ opencode models
 
 ---
 
+## Observability and evaluation
+
+Langfuse is self-hosted and optional. It is the flight recorder and evaluation lab;
+the control room remains the source of truth for operations.
+
+```bash
+cd infra/langfuse
+cp .env.example .env
+# replace every CHANGEME
+docker compose up -d
+```
+
+Then add the project keys to the root `.env`:
+
+```bash
+LANGFUSE_ENABLED=true
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_BASE_URL=http://127.0.0.1:3000
+LANGFUSE_PROJECT_ID=uiux-company-project
+LANGFUSE_DATASET=uiux-golden-tasks
+```
+
+Open **Improvement → Observability → Check connection**. Each company run becomes
+a Langfuse trace/session, with agent, code-worker, intent-packet, gate, and rollback
+spans plus scores. The **Evaluation Lab** runs three lanes on frozen golden tasks and
+exports datasets, experiments, evaluators, and aggregate scores to Langfuse. If
+Langfuse is disabled or down, the company continues and local SQLite results remain
+authoritative. Full setup, backup, and offline notes: [`infra/langfuse/README.md`](infra/langfuse/README.md).
+
 ## What is in the box
 
 ```
@@ -49,8 +79,11 @@ org/
   schemas/                         # JSON Schema contracts
 src/ui_ux_company/
   graph.py                         # LangGraph design company
-  evolution.py                     # separate evolution graph
+  evolution.py                     # separate company-improvement graph
   gateway.py                       # OpenCode model gateway (text + images)
+  langfuse_trace.py                # self-hosted Langfuse traces, spans, scores
+  evals.py                         # golden-task experiments + Langfuse export
+  app_plan.py                      # app plan read/write/search
   target_ui.py                     # scan, manifest, vision analysis, diff
   agents.py                        # role runner
   prompts.py                       # role prompts + JSON output contracts
@@ -59,7 +92,9 @@ src/ui_ux_company/
   storage.py                       # SQLite runs, events, approvals, token ledger
   artifacts.py                     # versioned artifact store
   static/                          # dependency-free control room
-tests/                             # 14 passing tests
+infra/langfuse/                    # self-hosted Docker Compose stack
+org/golden_tasks.yaml              # frozen evaluation tasks
+tests/                             # test suite
 target_ui_example/                 # generated placeholder reference image
 ui_ux-agent_company.md             # full constitution
 ```
@@ -73,9 +108,9 @@ flowchart LR
   G --> P["Tier 1–5 agent pods"]
   P <--> A["Versioned artifacts"]
   T["Target_ui"] --> P
-  G -.-> L["LangSmith traces / evals"]
+  G -.-> L["Langfuse traces / evals"]
   A -.-> L
-  L --> E["Org evolution auditor"]
+  L --> E["Company improvement auditor"]
   E --> C
 ```
 
@@ -85,14 +120,14 @@ flowchart LR
 
 The SPA is a narrow left icon rail plus tabs:
 
-- **Overview** — decree composer, recent runs, live timeline, compact org summary, approvals, budget, artifacts, Target_ui preview, evolution quick list.
+- **Overview** — decree composer, recent runs, live timeline, compact org summary, approvals, budget, artifacts, Target_ui preview, improvement quick list.
 - **Live Flow** — full-page hierarchical graph with CEO/Chief/tier leads/specialists, codenames A1–A36, five status categories: **Idle, Running, Completed, Waiting, Error**; one-sentence current work per agent, thin colored signal lines, company feed, zoom controls, and click-through agent detail. Only active/message-relevant lines show by default; the Dictator, A1, and A2 command lines stay visible (Dictator line glows). **All links** shows every connection from the start of the run. Click an agent for a live mini-window with its current sentence, events, connections, and outputs. The flow/feed divider is draggable. **Open tab ↗** moves the flow to a full-view browser tab with auto-fit and +/− zoom.
-- **Approvals** — sub-tabs for **Pending** and **Decision history**; source agent/codename, due time, overdue badge, approve/reject/dictate, and a **View proposal** link for evolution approvals. Every escalation shows a short, plain-language summary first, with **Show details** for the full evidence and fixes. Stale escalations from terminal runs are auto-dismissed into history.
+- **Approvals** — sub-tabs for **Pending** and **Decision history**; source agent/codename, due time, overdue badge, approve/reject/dictate, and a **View proposal** link for company-improvement approvals. Every escalation shows a short, plain-language summary first, with **Show details** for the full evidence and fixes. Stale escalations from terminal runs are auto-dismissed into history.
 - **Artifacts** — run selector, preview, screenshot upload, Re-run QA.
 - **Contract** — versioned design-contract editor with Save version and Re-run critique.
-- **History** — global combined history of company runs and evolution audits; tap any entry to restore its flow, timeline, artifacts, contract, and outputs. When no company run or evolution is active, the live panels clear automatically; nothing is lost because it is in History.
+- **History** — global combined history of company runs and improvement audits; tap any entry to restore its flow, timeline, artifacts, contract, and outputs. When no company run or improvement is active, the live panels clear automatically; nothing is lost because it is in History.
 - **Target_ui** — target + current-UI scan, recursive folder search, confidence/conflicts, and a rectangle annotation editor mapped to components.
-- **Evolution** — Observe → Diagnose → Evaluate → Approve → Apply → Canary cards, stop, approve/reject/dictate, automated metric canary, promote, and registry rollback.
+- **Improvement** — App Plan browser, Langfuse observability card, Evaluation Lab, and Observe → Diagnose → Evaluate → Approve → Apply → Pilot → Adopt cards, stop, approve/reject/dictate, automated metric pilot, adopt, and registry rollback.
 - **Settings** — active project switcher, project/current UI/Target_ui folders, all OpenCode models with a searchable picker, model test, editable token budget, autonomy, project validation, webhook/browser notifications, session/RBAC, audit log, and mock-data cleanup.
 
 Hierarchy: **CEO A1 → Chief A2 → five tier leads A3–A7 → specialists A8+**. Tier leads now run real review gates before design, critique, implementation, and manager evaluation. The Chief receives a compact `company_brief` with the org chart, capabilities, gates, playbooks, and governance. A structured **company feed** records short handoffs, reviews, artifacts, feedback, escalations, and instructions — visible to the run, not a free-form chat. Every agent call also receives a shared `company_context` with the current stage, active agents, recent one-sentence handoffs, ready artifacts, and any pending Dictator decision, so specialists stay aware without losing their role focus.
@@ -109,7 +144,7 @@ Hierarchy: **CEO A1 → Chief A2 → five tier leads A3–A7 → specialists A8+
 | `uiux run "<decree>" --mode ship` | Design + implementation + QA + release candidate. |
 | `uiux serve` | Start the control room at `http://127.0.0.1:8765`. |
 | `uiux target-ui scan ./target_ui_example --analyze` | Scan and vision-analyze Target_ui images. |
-| `uiux evolve --focus quality` | Ask the independent org auditor for an evolution proposal. |
+| `uiux evolve --focus quality` | Ask the independent company auditor for an improvement proposal. |
 | `uiux budget` | Show token spend and remaining budget. |
 | `uiux purge-mock` | Remove old mock/demo runs, approvals, artifacts, and mock token rows from the local DB. |
 | `uiux registry` | Print the registry summary and Mermaid org chart. |
@@ -136,7 +171,7 @@ A1–A36 design/review agents therefore use OpenCode’s model/routing/event inf
 
 Model aliases live in `org/architecture_registry.yaml`:
 
-- `reasoner` — architecture, synthesis, critique, evolution
+- `reasoner` — architecture, synthesis, critique, company improvement
 - `vision` — Target_ui analysis and visual review
 - `coder` — implementation planning
 - `critic` — independent review (use a different model in production for true independence)
@@ -178,7 +213,7 @@ observe → diagnose → propose → evaluate → Dictator approval → apply sa
 
 The auditor is independent from the orchestrator. It cannot approve or apply its own proposal. Safe mutations are limited to agent enabled/disabled, model alias swaps, gate thresholds, and budget caps. The previous registry version is backed up to `org/registry_history/`.
 
-The current shadow evaluation is a heuristic MVP. Production should use LangSmith datasets/experiments and a golden task set before approval.
+The current shadow evaluation is a heuristic MVP. The Evaluation Lab runs three lanes (`direct_opencode`, `company_without_packet`, `company_with_packet`) on frozen golden tasks and exports datasets, experiments, scores, and evaluator results to self-hosted Langfuse. The improvement auditor reads the app plan and the latest experiment evidence before proposing a change.
 
 ---
 
@@ -205,7 +240,7 @@ Upload screenshots to the control room via `POST /api/runs/{run_id}/screenshots`
 - **Live Flow:** Full-page hierarchical graph. Icons show idle / running / completed / error / waiting. Agent cards show codenames and current work labels. Thin colored lines show handoffs, reviews, artifacts, feedback, escalations, and instructions. Click any agent for status, last event, artifacts, and token usage.
 - **Modes:** Explore, Design, Build, Ship, Audit, Fix.
 - **Run stop:** Live run and Live Flow have a Stop button. Default is graceful; the current model call is cancelled and the run/approvals are marked stopped.
-- **Evolution:** Start audit, watch Observe → Diagnose → Evaluate → Approve → Apply → Canary cards, stop the audit, Approve / Reject / Dictate, and rollback an applied registry change. **Auto-apply safe changes** skips the approval pause only when you pre-approve it; unsafe structural changes still require deployment.
+- **Improvement:** Start audit, watch Observe → Diagnose → Evaluate → Approve → Apply → Pilot cards, stop the audit, Approve / Reject / Dictate, and roll back an applied registry change. **Auto-apply safe changes** skips the approval pause only when you pre-approve it; unsafe structural changes still require deployment.
 - **Design contract:** Contract tab → edit authoritative decisions/acceptance matrix → Save version → Re-run critique.
 - **QA re-check:** Artifacts → upload screenshots → Re-run QA. It reuses the existing run and does not redo design.
 - **Approvals:** Every pending decision shows its source agent/codename and due time. Approve / Reject / Dictate; decided cards move to Decision History.
@@ -286,7 +321,7 @@ The reader denies `.env`, `.git`, and paths outside the allowed project roots. I
 
 ## Current limitations (honest)
 
-**Implemented in this build:** left rail, full-page flow, CEO/5 leads/codenames, real tier-lead review gates, company feed and signal lines, approval provenance/SLA/overdue, decision history, modes, model test, run stop, recursive folder search, current-UI baseline + visual diff, project validation, mock-data cleanup, QA re-check, design-contract editor, evolution rollback + metric canary, searchable model picker, flow zoom, target annotations, multi-project active switcher, token RBAC + audit log, webhook/browser notifications, Postgres checkpoint support, S3/MinIO artifact mirroring, real build/ship/fix code workers with worktree isolation and reviewable diffs, the residual intent packet, and read-only repo inspection for engineering roles.
+**Implemented in this build:** left rail, full-page flow, CEO/5 leads/codenames, real tier-lead review gates, company feed and signal lines, approval provenance/SLA/overdue, decision history, modes, model test, run stop, recursive folder search, current-UI baseline + visual diff, project validation, mock-data cleanup, QA re-check, design-contract editor, improvement rollback + metric pilot, searchable model picker, flow zoom, target annotations, multi-project active switcher, token RBAC + audit log, webhook/browser notifications, Postgres checkpoint support, S3/MinIO artifact mirroring, real build/ship/fix code workers with worktree isolation and reviewable diffs, the residual intent packet, and read-only repo inspection for engineering roles.
 
 **Still limited / queued:**
 - App metadata still uses SQLite unless migrated; Postgres currently backs LangGraph checkpoints.
@@ -294,10 +329,10 @@ The reader denies `.env`, `.git`, and paths outside the allowed project roots. I
 - Auth is token-based RBAC, not OIDC/SSO.
 - Multi-project switch is active-profile only; no simultaneous project runs or per-project budget isolation.
 - Dynamic `add_agent` updates the registry/org chart; extra leads/specialists need a graph rebuild or generic task dispatch to execute inside the main pipeline.
-- Canary is an automated metric heuristic over recent runs, not a full LangSmith golden-task shadow eval.
+- Pilot rollout is an automated metric heuristic over recent runs; the separate three-lane golden-task Evaluation Lab is the stronger evidence path.
 - Target annotations are rectangles with labels, not freehand regions.
 - Notifications are webhook/browser; no email.
-- Deeper LangSmith datasets/experiments and judge calibration remain.
+- Deeper Langfuse experiment judge calibration and trend analysis remain.
 
 Other limitations:
 
@@ -308,7 +343,7 @@ Other limitations:
 - **Reader scope:** `uiux-reader` currently allows repo roots under `/home/pluto/main_projects/**`; a project elsewhere needs an `external_directory` entry.
 - **Visual QA** has the adapter contract and upload path; the full emulator/ADB automation is the next production step.
 - **Functional/a11y QA** accepts test evidence; it does not yet drive UIAutomator/Espresso itself.
-- **Evolution shadow eval** is heuristic; production needs LangSmith experiments and golden tasks.
+- **Improvement shadow eval** is heuristic; production needs Langfuse experiments and calibrated golden tasks. Langfuse is implemented as the evidence source, with local SQLite fallback.
 - **Figma** is optional; the default source of truth is spec-first + Compose + screenshots.
 
 The full production upgrade path is in [`ui_ux-agent_company.md`](ui_ux-agent_company.md), sections 14–19.
@@ -332,7 +367,7 @@ SSE: `GET /api/runs/{run_id}/events`
 
 Approvals: `GET /api/approvals`, `POST /api/approvals/{id}/decide`
 
-Evolution: `POST /api/evolve`, `GET /api/evolve`, `POST /api/evolve/{id}/approve`
+Company improvement: `POST /api/evolve`, `GET /api/evolve`, `POST /api/evolve/{id}/approve`
 
 ---
 
@@ -342,4 +377,4 @@ Evolution: `POST /api/evolve`, `GET /api/evolve`, `POST /api/evolve/{id}/approve
 .venv/bin/pytest -q
 ```
 
-Current coverage: registry validation, Target_ui scan, model gateway, mock graph end-to-end, API health, evolution proposal/reject.
+Current coverage: registry validation, Target_ui scan, model gateway, mock graph end-to-end, API health, improvement proposal/reject.

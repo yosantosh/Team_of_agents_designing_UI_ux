@@ -21,5 +21,8 @@ def settings(tmp_path: Path) -> Settings:
     base.model_backend = "mock"
     base.auto_approve = True
     base.durable_checkpoints = False
+    base.langfuse_enabled = False
+    base.langfuse_public_key = ""
+    base.langfuse_secret_key = ""
     base.ensure_dirs()
     return base

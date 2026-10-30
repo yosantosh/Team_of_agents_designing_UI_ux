@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -19,6 +20,7 @@ from .events import EventBus
 from .gateway import ModelGateway
 from .intent import build_intent_packet, select_target_images
 from .app_plan import plan_context as app_plan_context
+from .langfuse_trace import LangfuseTracer
 from .models import new_id, utcnow
 from .prompts import work_label
 from .registry import BudgetPolicy, ProjectProfile, Registry, load_budget, load_profile, load_registry
@@ -90,6 +92,7 @@ class CompanyGraph:
         gateway: ModelGateway | None = None,
         agents: AgentRunner | None = None,
         code_worker: CodeWorker | None = None,
+        tracer: LangfuseTracer | None = None,
     ):
         self.settings = settings or Settings.from_env()
         self.registry = registry or load_registry(self.settings)
@@ -100,8 +103,11 @@ class CompanyGraph:
         self.storage = storage or Storage(self.settings.storage_db)
         self.bus = bus or EventBus(self.storage)
         self.artifacts = artifacts or ArtifactStore(self.settings, self.storage)
+        self.tracer = tracer or LangfuseTracer(self.settings)
         self.gateway = gateway or ModelGateway(self.settings, self.registry, self.storage)
-        self.agents = agents or AgentRunner(self.gateway, self.registry)
+        self.agents = agents or AgentRunner(self.gateway, self.registry, tracer=self.tracer)
+        if getattr(self.agents, "tracer", None) is None:
+            self.agents.tracer = self.tracer
         self.code_worker = code_worker or CodeWorker(self.settings, self.artifacts)
         self.checkpointer = None
         self._checkpointer_cm = None
@@ -1007,6 +1013,15 @@ class CompanyGraph:
                 gate = "escalate"
         critique["_gate"] = gate
         critique["_rework_count"] = counts.get("design", 0)
+        self.tracer.span_now(
+            "gate:design_critique",
+            as_type="guardrail",
+            input={"verdict": verdict, "score": score, "contract_conflicts": len(contract_conflicts)},
+            output={"gate": gate, "rework_count": counts.get("design", 0), "issues": len(critique.get("issues") or [])},
+            metadata={"run_id": state.get("run_id")},
+            trace_id=state.get("langfuse_trace_id"),
+            level="ERROR" if gate == "escalate" else None,
+        )
         await self._write(state, "design_critique.json", critique, "independent_design_critic")
         await self._event(
             state,
@@ -1111,6 +1126,14 @@ class CompanyGraph:
             needs=summary,
             artifact="design_critique.json",
         )
+        self.tracer.span_now(
+            "gate:human_design_approval",
+            as_type="guardrail",
+            input={"critique_score": score, "approval_id": approval["approval_id"]},
+            output={"status": "awaiting_approval", "title": title},
+            metadata={"run_id": state.get("run_id")},
+            trace_id=state.get("langfuse_trace_id"),
+        )
         decision = interrupt(
             {
                 "type": "design_approval",
@@ -1180,6 +1203,20 @@ class CompanyGraph:
                     documents=[app_plan_context(self.settings, self.profile)],
                 )
                 await self._write(state, "intent_packet.json", intent_packet, "chief_orchestrator")
+                self.tracer.span_now(
+                    "intent_packet",
+                    as_type="chain",
+                    input={"mode": state.get("mode"), "prompt_chars": len(str(state.get("prompt") or ""))},
+                    output={
+                        "version": intent_packet.get("version"),
+                        "chars": (intent_packet.get("meta") or {}).get("chars"),
+                        "within_budget": (intent_packet.get("meta") or {}).get("within_budget"),
+                        "sources": intent_packet.get("sources", []),
+                        "target_images": len(intent_packet.get("target_images") or []),
+                    },
+                    metadata={"run_id": state.get("run_id")},
+                    trace_id=state.get("langfuse_trace_id"),
+                )
                 await self._event(
                     state,
                     "intent.packet.ready",
@@ -1200,6 +1237,15 @@ class CompanyGraph:
                     "human_decision": state.get("human_decision", {}),
                 }
             except Exception as exc:
+                self.tracer.span_now(
+                    "intent_packet",
+                    as_type="chain",
+                    input={"mode": state.get("mode")},
+                    output={"error": str(exc)},
+                    metadata={"run_id": state.get("run_id")},
+                    trace_id=state.get("langfuse_trace_id"),
+                    level="ERROR",
+                )
                 await self._event(
                     state,
                     "intent.packet.failed",
@@ -1279,16 +1325,46 @@ class CompanyGraph:
                         }
                     )
                 try:
-                    code_result = await self.code_worker.apply(
-                        state["run_id"],
-                        str(repo_path),
-                        str(state.get("change_request", {}).get("problem") or state.get("prompt", "Implement the approved design")),
-                        code_context,
-                        intent_packet=intent_packet,
-                        images=self._target_image_paths(state),
-                    )
+                    with self.tracer.span(
+                        "code_worker",
+                        as_type="tool",
+                        input={
+                            "run_id": state["run_id"],
+                            "repo": str(repo_path),
+                            "mode": state.get("mode"),
+                            "images": len(self._target_image_paths(state)),
+                        },
+                        metadata={"run_id": state["run_id"], "branch": f"uiux/{state['run_id']}"},
+                    ) as span:
+                        code_result = await self.code_worker.apply(
+                            state["run_id"],
+                            str(repo_path),
+                            str(state.get("change_request", {}).get("problem") or state.get("prompt", "Implement the approved design")),
+                            code_context,
+                            intent_packet=intent_packet,
+                            images=self._target_image_paths(state),
+                        )
+                        self.tracer.update_span(
+                            span,
+                            output={
+                                "status": code_result.get("status"),
+                                "worktree": code_result.get("worktree"),
+                                "branch": code_result.get("branch"),
+                                "changed_files": code_result.get("changed_files", []),
+                                "verification": code_result.get("verification"),
+                            },
+                            level="ERROR" if code_result.get("status") == "failed" else None,
+                        )
                 except Exception as exc:
                     code_result = {"status": "failed", "reason": str(exc)}
+                    self.tracer.span_now(
+                        "code_worker_error",
+                        as_type="tool",
+                        input={"run_id": state["run_id"]},
+                        output={"error": str(exc)},
+                        trace_id=state.get("langfuse_trace_id"),
+                        level="ERROR",
+                    )
             data["code_edits"] = code_result
             data["status"] = code_result.get("status", "unknown")
             await self._event(
@@ -1464,6 +1540,15 @@ class CompanyGraph:
             gate = "needs_rework"
 
         qa = {"visual": visual_result, "functional": functional_result, "gate": gate, "simulated": bool(state.get("demo"))}
+        self.tracer.span_now(
+            "gate:visual_functional_qa",
+            as_type="guardrail",
+            input={"visual": v, "functional": f},
+            output={"gate": gate, "simulated": bool(state.get("demo"))},
+            metadata={"run_id": state.get("run_id")},
+            trace_id=state.get("langfuse_trace_id"),
+            level="ERROR" if gate in {"needs_rework", "not_run"} else None,
+        )
         await self._write(state, "qa_report.json", qa, "visual_qa_inspector")
         await self._event(
             state,
@@ -1532,6 +1617,20 @@ class CompanyGraph:
         evaluation["_simulated"] = simulated
         evaluation["_gate"] = gate
         evaluation["_model_verdict"] = model_verdict
+        self.tracer.span_now(
+            "gate:manager_evaluation",
+            as_type="guardrail",
+            input={
+                "critique_gate": critique_gate,
+                "qa_gate": qa_gate,
+                "design_approved": design_approved,
+                "lead_red": lead_red,
+            },
+            output={"gate": gate, "model_verdict": model_verdict, "deterministic_pass": deterministic},
+            metadata={"run_id": state.get("run_id")},
+            trace_id=state.get("langfuse_trace_id"),
+            level="ERROR" if gate == "escalate" else None,
+        )
         await self._write(state, "evaluation.json", evaluation, "chief_orchestrator")
         await self._event(
             state,
@@ -1571,6 +1670,14 @@ class CompanyGraph:
             "visual_qa": (state.get("qa", {}) or {}).get("visual", {}).get("verdict"),
             "functional_a11y": (state.get("qa", {}) or {}).get("functional", {}).get("verdict"),
         }
+        self.tracer.span_now(
+            "gate:release_candidate",
+            as_type="guardrail",
+            input={"eval_gate": state.get("eval_gate"), "mode": state.get("mode")},
+            output={"gates": release["gates"], "artifact_type": release["artifact_type"]},
+            metadata={"run_id": state.get("run_id")},
+            trace_id=state.get("langfuse_trace_id"),
+        )
         await self._write(state, "release_candidate.json", release, "release_manager")
         notes = release.get("release_notes", [])
         md = "# Release notes\n\n" + "\n".join(f"- {n}" for n in notes) + "\n\n"
@@ -1750,8 +1857,9 @@ class CompanyGraph:
         *,
         mode: str | None = None,
         backend: str | None = None,
+        trace_id: str | None = None,
     ) -> dict[str, Any]:
-        return {
+        config = {
             "configurable": {"thread_id": run_id},
             "run_name": f"uiux-{run_id}",
             "tags": ["uiux-agent-company", f"registry-{self.registry.version}"],
@@ -1764,6 +1872,11 @@ class CompanyGraph:
                 "autonomy_level": self.settings.autonomy_level,
             },
         }
+        if trace_id:
+            callbacks = self.tracer.langchain_callbacks(trace_id)
+            if callbacks:
+                config["callbacks"] = callbacks
+        return config
 
     def _sanitize(self, result: dict[str, Any]) -> dict[str, Any]:
         clean: dict[str, Any] = {}
@@ -1786,6 +1899,21 @@ class CompanyGraph:
                     clean[key] = str(value)
         return clean
 
+    def _attach_trace(self, values: dict[str, Any], trace: Any) -> dict[str, Any]:
+        if trace is None or not getattr(trace, "trace_id", None):
+            return values
+        values["langfuse_trace_id"] = trace.trace_id
+        url = getattr(trace, "url", None) or self.tracer.trace_url(trace.trace_id)
+        if url:
+            values["langfuse_trace_url"] = url
+        return values
+
+    def _score_trace(self, trace: Any, values: dict[str, Any], started: float) -> None:
+        if trace is None or not getattr(trace, "trace_id", None):
+            return
+        duration_ms = int((time.monotonic() - started) * 1000)
+        self.tracer.score_run(trace.trace_id, values, duration_ms=duration_ms)
+
     async def run(
         self,
         prompt: str,
@@ -1806,64 +1934,109 @@ class CompanyGraph:
         self.storage.add_agent_message(run_id, "dictator", "ceo", "handoff", did="Issued a new decree", doing="CEO intake and priority check")
         self.storage.add_agent_message(run_id, "ceo", "chief_orchestrator", "handoff", did="Accepted the decree", doing="Routing the company")
         await self.bus.publish(run_id, "run.started", "Run started", "chief_orchestrator", {"prompt": prompt, "mode": mode})
-        initial: CompanyState = {
+        started = time.monotonic()
+        trace_metadata = {
             "run_id": run_id,
-            "project_id": self.settings.project_id,
-            "prompt": prompt,
             "mode": mode,
-            "backend": backend or self.settings.model_backend,
-            "model": model or self.settings.model_override,
-            "demo": demo,
-            "auto_approve": self.settings.auto_approve if auto_approve is None else auto_approve,
-            "autonomy_level": autonomy_level or self.settings.autonomy_level,
-            "target_ui_enabled": self.settings.target_ui_enabled if target_ui_enabled is None else target_ui_enabled,
-            "target_ui_path": str(self.settings.target_ui_path),
-            "intent_packet_enabled": self.settings.intent_packet_enabled if intent_packet_enabled is None else intent_packet_enabled,
-            "rework_counts": {"design": 0, "implementation": 0},
-            "errors": [],
-            "status": "intake",
+            "model": model or self.settings.model_override or self.settings.opencode_model,
+            "project": str(self.profile.project.get("name") or self.settings.project_id),
+            "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+            "intent_packet": bool(
+                self.settings.intent_packet_enabled if intent_packet_enabled is None else intent_packet_enabled
+            ),
+            "target_ui": bool(
+                self.settings.target_ui_enabled if target_ui_enabled is None else target_ui_enabled
+            ),
+            "registry_version": self.registry.version,
         }
-        try:
-            result = await self.graph.ainvoke(
-                initial,
-                self._config(run_id, mode=mode, backend=initial.get("backend")),
-            )
-            clean = self._sanitize(dict(result))
-            interrupted = bool(clean.get("__interrupt__"))
-            status = "awaiting_approval" if interrupted else str(clean.get("status", "completed"))
-            self.storage.update_run(run_id, status=status, state=clean)
-            if interrupted:
-                await self.bus.publish(
-                    run_id,
-                    "run.paused",
-                    "Run paused for Dictator approval",
-                    "chief_orchestrator",
-                    {"interrupts": clean.get("__interrupt__")},
+        with self.tracer.run_trace(
+            run_id=run_id,
+            mode=mode,
+            prompt=prompt,
+            metadata=trace_metadata,
+            tags=[f"registry-{self.registry.version}"],
+        ) as trace:
+            initial: CompanyState = {
+                "run_id": run_id,
+                "project_id": self.settings.project_id,
+                "prompt": prompt,
+                "mode": mode,
+                "backend": backend or self.settings.model_backend,
+                "model": model or self.settings.model_override,
+                "demo": demo,
+                "auto_approve": self.settings.auto_approve if auto_approve is None else auto_approve,
+                "autonomy_level": autonomy_level or self.settings.autonomy_level,
+                "target_ui_enabled": self.settings.target_ui_enabled if target_ui_enabled is None else target_ui_enabled,
+                "target_ui_path": str(self.settings.target_ui_path),
+                "intent_packet_enabled": self.settings.intent_packet_enabled if intent_packet_enabled is None else intent_packet_enabled,
+                "rework_counts": {"design": 0, "implementation": 0},
+                "errors": [],
+                "status": "intake",
+            }
+            self._attach_trace(initial, trace)
+            try:
+                result = await self.graph.ainvoke(
+                    initial,
+                    self._config(
+                        run_id,
+                        mode=mode,
+                        backend=initial.get("backend"),
+                        trace_id=getattr(trace, "trace_id", None),
+                    ),
                 )
-            else:
-                self.storage.add_agent_message(
-                    run_id,
-                    "chief_orchestrator",
-                    "dictator",
-                    "broadcast",
-                    did=f"Run {status}",
-                    doing="Reporting the outcome",
-                    artifact="release_candidate.json" if clean.get("release") else None,
-                )
-                await self.bus.publish(
-                    run_id,
-                    "run.completed",
-                    f"Run {status}",
-                    "chief_orchestrator",
-                    {"status": status, "simulated": bool(clean.get("demo"))},
-                )
-            return clean
-        except Exception as exc:
-            error = {"message": str(exc), "type": type(exc).__name__, "at": utcnow()}
-            self.artifacts.write_json(run_id, "error.json", error, created_by="chief_orchestrator")
-            self.storage.update_run(run_id, status="failed", state={**initial, "status": "failed", "error": error})
-            await self.bus.publish(run_id, "run.failed", str(exc), "chief_orchestrator", error)
-            return {**initial, "status": "failed", "error": error}
+                clean = self._sanitize(dict(result))
+                self._attach_trace(clean, trace)
+                interrupted = bool(clean.get("__interrupt__"))
+                status = "awaiting_approval" if interrupted else str(clean.get("status", "completed"))
+                self.storage.update_run(run_id, status=status, state=clean)
+                self._score_trace(trace, clean, started)
+                if trace is not None:
+                    trace.update(
+                        output={
+                            "status": status,
+                            "critique_gate": clean.get("critique_gate"),
+                            "eval_gate": clean.get("eval_gate"),
+                            "qa_gate": clean.get("qa_gate"),
+                            "rework_counts": clean.get("rework_counts"),
+                        }
+                    )
+                if interrupted:
+                    await self.bus.publish(
+                        run_id,
+                        "run.paused",
+                        "Run paused for Dictator approval",
+                        "chief_orchestrator",
+                        {"interrupts": clean.get("__interrupt__")},
+                    )
+                else:
+                    self.storage.add_agent_message(
+                        run_id,
+                        "chief_orchestrator",
+                        "dictator",
+                        "broadcast",
+                        did=f"Run {status}",
+                        doing="Reporting the outcome",
+                        artifact="release_candidate.json" if clean.get("release") else None,
+                    )
+                    await self.bus.publish(
+                        run_id,
+                        "run.completed",
+                        f"Run {status}",
+                        "chief_orchestrator",
+                        {"status": status, "simulated": bool(clean.get("demo"))},
+                    )
+                return clean
+            except Exception as exc:
+                error = {"message": str(exc), "type": type(exc).__name__, "at": utcnow()}
+                self.artifacts.write_json(run_id, "error.json", error, created_by="chief_orchestrator")
+                failed = {**initial, "status": "failed", "error": error}
+                self._attach_trace(failed, trace)
+                self.storage.update_run(run_id, status="failed", state=failed)
+                self._score_trace(trace, failed, started)
+                if trace is not None:
+                    trace.update(output={"status": "failed", "error": error}, metadata={"error": True})
+                await self.bus.publish(run_id, "run.failed", str(exc), "chief_orchestrator", error)
+                return failed
 
     async def run_agent_task(
         self,
@@ -1889,12 +2062,22 @@ class CompanyGraph:
             except Exception:
                 state = {}
         state["run_id"] = run_id
-        result = await self._call(
-            state,
-            agent_id,
-            goal,
-            context or {},
-        )
+        with self.tracer.run_trace(
+            run_id=run_id,
+            mode="agent_task",
+            prompt=goal,
+            metadata={"run_id": run_id, "agent_id": agent_id},
+            tags=["agent-task"],
+        ) as trace:
+            self._attach_trace(state, trace)
+            result = await self._call(
+                state,
+                agent_id,
+                goal,
+                context or {},
+            )
+            if trace is not None:
+                trace.update(output={"agent": agent_id, "data_keys": sorted((result.data or {}).keys())})
         name = artifact_name or f"agent_task_{agent_id}.json"
         await self._write(state, name, result.data, agent_id)
         return {"agent": agent_id, "codename": agent.get("codename"), "data": result.data, "artifact": name}
@@ -1917,8 +2100,21 @@ class CompanyGraph:
         state["run_id"] = run_id
         if contract is not None:
             state["design_contract"] = contract
-        critique_update = await self._critique(state)
-        state.update(critique_update)
+        started = time.monotonic()
+        with self.tracer.run_trace(
+            run_id=run_id,
+            mode="recritique",
+            prompt=str(state.get("prompt") or ""),
+            metadata={"run_id": run_id, "recritique": True},
+            tags=["recritique"],
+        ) as trace:
+            self._attach_trace(state, trace)
+            critique_update = await self._critique(state)
+            state.update(critique_update)
+            self._attach_trace(state, trace)
+            self._score_trace(trace, state, started)
+            if trace is not None:
+                trace.update(output={"critique_gate": state.get("critique_gate")})
         self.storage.update_run(run_id, status=str(state.get("status", "critique")), state=self._sanitize(state))
         await self.bus.publish(
             run_id,
@@ -1951,14 +2147,27 @@ class CompanyGraph:
         if implementation.get("status") == "skipped" or not implementation:
             implementation["status"] = "provided"
         state["implementation"] = implementation
-        qa_update = await self._qa(state)
-        state.update(qa_update)
-        eval_update = await self._manager_eval(state)
-        state.update(eval_update)
-        if eval_update.get("eval_gate") == "pass":
-            state.update(await self._release(state))
-        else:
-            state.update(await self._escalate(state))
+        started = time.monotonic()
+        with self.tracer.run_trace(
+            run_id=run_id,
+            mode="qa_recheck",
+            prompt=str(state.get("prompt") or ""),
+            metadata={"run_id": run_id, "qa_recheck": True},
+            tags=["qa-recheck"],
+        ) as trace:
+            self._attach_trace(state, trace)
+            qa_update = await self._qa(state)
+            state.update(qa_update)
+            eval_update = await self._manager_eval(state)
+            state.update(eval_update)
+            if eval_update.get("eval_gate") == "pass":
+                state.update(await self._release(state))
+            else:
+                state.update(await self._escalate(state))
+            self._attach_trace(state, trace)
+            self._score_trace(trace, state, started)
+            if trace is not None:
+                trace.update(output={"eval_gate": state.get("eval_gate"), "qa_gate": state.get("qa_gate")})
         self.storage.update_run(run_id, status=str(state.get("status", "completed")), state=self._sanitize(state))
         await self.bus.publish(
             run_id,
@@ -1989,22 +2198,38 @@ class CompanyGraph:
 
     async def resume(self, run_id: str, decision: dict[str, Any]) -> dict[str, Any]:
         await self._ensure_graph()
+        run = self.storage.get_run(run_id) or {}
+        started = time.monotonic()
         await self.bus.publish(run_id, "run.resumed", "Run resumed by Dictator", "chief_orchestrator", {"decision": decision})
-        try:
-            result = await self.graph.ainvoke(
-                Command(resume=decision),
-                self._config(run_id),
-            )
-            clean = self._sanitize(dict(result))
-            status = "awaiting_approval" if clean.get("__interrupt__") else str(clean.get("status", "completed"))
-            self.storage.update_run(run_id, status=status, state=clean)
-            await self.bus.publish(run_id, "run.completed" if not clean.get("__interrupt__") else "run.paused", f"Run {status}", "chief_orchestrator", {"status": status})
-            return clean
-        except Exception as exc:
-            error = {"message": str(exc), "type": type(exc).__name__, "at": utcnow()}
-            self.storage.update_run(run_id, status="failed", state={"status": "failed", "error": error})
-            await self.bus.publish(run_id, "run.failed", str(exc), "chief_orchestrator", error)
-            return {"status": "failed", "error": error}
+        with self.tracer.run_trace(
+            run_id=run_id,
+            mode=str(run.get("mode") or "resume"),
+            prompt=str(run.get("prompt") or ""),
+            metadata={"run_id": run_id, "resumed": True},
+            tags=["resume"],
+        ) as trace:
+            try:
+                result = await self.graph.ainvoke(
+                    Command(resume=decision),
+                    self._config(run_id, trace_id=getattr(trace, "trace_id", None)),
+                )
+                clean = self._sanitize(dict(result))
+                self._attach_trace(clean, trace)
+                status = "awaiting_approval" if clean.get("__interrupt__") else str(clean.get("status", "completed"))
+                self.storage.update_run(run_id, status=status, state=clean)
+                self._score_trace(trace, clean, started)
+                if trace is not None:
+                    trace.update(output={"status": status})
+                await self.bus.publish(run_id, "run.completed" if not clean.get("__interrupt__") else "run.paused", f"Run {status}", "chief_orchestrator", {"status": status})
+                return clean
+            except Exception as exc:
+                error = {"message": str(exc), "type": type(exc).__name__, "at": utcnow()}
+                failed = {"status": "failed", "error": error}
+                self._attach_trace(failed, trace)
+                self.storage.update_run(run_id, status="failed", state=failed)
+                self._score_trace(trace, failed, started)
+                await self.bus.publish(run_id, "run.failed", str(exc), "chief_orchestrator", error)
+                return failed
 
     async def resume_run(self, run_id: str, decision: dict[str, Any] | None = None) -> dict[str, Any]:
         """Resume a failed or stopped run from its last durable checkpoint."""
@@ -2024,6 +2249,7 @@ class CompanyGraph:
         from_stage = ", ".join(next_nodes) or "approval"
         resumed_state = dict(snapshot.values or {})
         resumed_state.update({"status": "running", "resumed_from": from_stage})
+        started = time.monotonic()
         self.storage.update_run(run_id, status="running", state=resumed_state)
         self.artifacts.write_json(
             run_id,
@@ -2038,33 +2264,44 @@ class CompanyGraph:
             "chief_orchestrator",
             {"from_stage": from_stage, "next": next_nodes},
         )
-        try:
-            result = await self.graph.ainvoke(
-                Command(resume=decision) if interrupts and decision is not None else None,
-                self._config(run_id),
-            )
-            clean = self._sanitize(dict(result))
-            interrupted = bool(clean.get("__interrupt__"))
-            status = "awaiting_approval" if interrupted else str(clean.get("status", "completed"))
-            self.storage.update_run(run_id, status=status, state=clean)
-            await self.bus.publish(
-                run_id,
-                "run.paused" if interrupted else "run.completed",
-                f"Run {status}",
-                "chief_orchestrator",
-                {"status": status, "resumed": True},
-            )
-            return clean
-        except Exception as exc:
-            error = {"message": str(exc), "type": type(exc).__name__, "at": utcnow()}
-            self.artifacts.write_json(run_id, "error.json", error, created_by="chief_orchestrator")
-            self.storage.update_run(
-                run_id,
-                status="failed",
-                state={**resumed_state, "status": "failed", "error": error},
-            )
-            await self.bus.publish(run_id, "run.failed", str(exc), "chief_orchestrator", error)
-            return {"status": "failed", "error": error}
+        with self.tracer.run_trace(
+            run_id=run_id,
+            mode=str(run.get("mode") or "resume"),
+            prompt=str(run.get("prompt") or ""),
+            metadata={"run_id": run_id, "resumed": True, "from_stage": from_stage},
+            tags=["resume"],
+        ) as trace:
+            self._attach_trace(resumed_state, trace)
+            try:
+                result = await self.graph.ainvoke(
+                    Command(resume=decision) if interrupts and decision is not None else None,
+                    self._config(run_id, trace_id=getattr(trace, "trace_id", None)),
+                )
+                clean = self._sanitize(dict(result))
+                self._attach_trace(clean, trace)
+                interrupted = bool(clean.get("__interrupt__"))
+                status = "awaiting_approval" if interrupted else str(clean.get("status", "completed"))
+                self.storage.update_run(run_id, status=status, state=clean)
+                self._score_trace(trace, clean, started)
+                if trace is not None:
+                    trace.update(output={"status": status, "resumed_from": from_stage})
+                await self.bus.publish(
+                    run_id,
+                    "run.paused" if interrupted else "run.completed",
+                    f"Run {status}",
+                    "chief_orchestrator",
+                    {"status": status, "resumed": True},
+                )
+                return clean
+            except Exception as exc:
+                error = {"message": str(exc), "type": type(exc).__name__, "at": utcnow()}
+                self.artifacts.write_json(run_id, "error.json", error, created_by="chief_orchestrator")
+                failed = {**resumed_state, "status": "failed", "error": error}
+                self._attach_trace(failed, trace)
+                self.storage.update_run(run_id, status="failed", state=failed)
+                self._score_trace(trace, failed, started)
+                await self.bus.publish(run_id, "run.failed", str(exc), "chief_orchestrator", error)
+                return failed
 
     def _is_crisis_escalation(self, values: dict[str, Any]) -> bool:
         critique = values.get("critique") or {}
@@ -2170,7 +2407,13 @@ class CompanyGraph:
             as_node = "human_gate"
             message = "Escalation approved; continuing with a recorded Dictator override"
 
-        await self.graph.aupdate_state(self._config(run_id), values, as_node=as_node)
+        trace_id = self.tracer.create_trace_id(seed=run_id)
+        if trace_id:
+            values["langfuse_trace_id"] = trace_id
+            trace_url = self.tracer.trace_url(trace_id)
+            if trace_url:
+                values["langfuse_trace_url"] = trace_url
+        await self.graph.aupdate_state(self._config(run_id, trace_id=trace_id), values, as_node=as_node)
         self.storage.update_run(run_id, status="running", state={**values, "status": "running"})
         self.artifacts.write_json(
             run_id,
@@ -2185,26 +2428,45 @@ class CompanyGraph:
             "chief_orchestrator",
             {"from_stage": "escalation", "decision": values.get("human_decision")},
         )
-        try:
-            result = await self.graph.ainvoke(None, self._config(run_id))
-            clean = self._sanitize(dict(result))
-            interrupted = bool(clean.get("__interrupt__"))
-            status = "awaiting_approval" if interrupted else str(clean.get("status", "completed"))
-            self.storage.update_run(run_id, status=status, state=clean)
-            await self.bus.publish(
-                run_id,
-                "run.paused" if interrupted else "run.completed",
-                f"Run {status}",
-                "chief_orchestrator",
-                {"status": status, "resumed_from_escalation": True},
-            )
-            return clean
-        except Exception as exc:
-            error = {"message": str(exc), "type": type(exc).__name__, "at": utcnow()}
-            self.artifacts.write_json(run_id, "error.json", error, created_by="chief_orchestrator")
-            self.storage.update_run(run_id, status="failed", state={**values, "status": "failed", "error": error})
-            await self.bus.publish(run_id, "run.failed", str(exc), "chief_orchestrator", error)
-            return {"status": "failed", "error": error}
+        started = time.monotonic()
+        with self.tracer.run_trace(
+            run_id=run_id,
+            mode=str(run.get("mode") or "escalation"),
+            prompt=str(run.get("prompt") or ""),
+            metadata={"run_id": run_id, "resumed": True, "from_stage": "escalation"},
+            tags=["resume", "escalation"],
+        ) as trace:
+            self._attach_trace(values, trace)
+            try:
+                result = await self.graph.ainvoke(
+                    None,
+                    self._config(run_id, trace_id=getattr(trace, "trace_id", None) or trace_id),
+                )
+                clean = self._sanitize(dict(result))
+                self._attach_trace(clean, trace)
+                interrupted = bool(clean.get("__interrupt__"))
+                status = "awaiting_approval" if interrupted else str(clean.get("status", "completed"))
+                self.storage.update_run(run_id, status=status, state=clean)
+                self._score_trace(trace, clean, started)
+                if trace is not None:
+                    trace.update(output={"status": status, "from_stage": "escalation"})
+                await self.bus.publish(
+                    run_id,
+                    "run.paused" if interrupted else "run.completed",
+                    f"Run {status}",
+                    "chief_orchestrator",
+                    {"status": status, "resumed_from_escalation": True},
+                )
+                return clean
+            except Exception as exc:
+                error = {"message": str(exc), "type": type(exc).__name__, "at": utcnow()}
+                self.artifacts.write_json(run_id, "error.json", error, created_by="chief_orchestrator")
+                failed = {**values, "status": "failed", "error": error}
+                self._attach_trace(failed, trace)
+                self.storage.update_run(run_id, status="failed", state=failed)
+                self._score_trace(trace, failed, started)
+                await self.bus.publish(run_id, "run.failed", str(exc), "chief_orchestrator", error)
+                return failed
 
     async def delete_thread(self, run_id: str) -> None:
         """Best-effort removal of the LangGraph checkpoint thread for a deleted run."""

@@ -136,7 +136,7 @@
               <li>No mock data in the production control room.</li>
               <li>Roborazzi removed. Visual QA uses emulator/ADB capture.</li>
               <li>Every artifact is versioned, hashed, and linked to a run.</li>
-              <li>LangSmith is the flight recorder; this is the control room.</li>
+              <li>Langfuse is the flight recorder; this is the control room.</li>
               <li>No agent may approve its own improvement.</li>
             </ul>
           </div>
@@ -330,12 +330,24 @@
         <textarea id="app-plan-content" rows="12" placeholder="The overall app plan. The improvement auditor reads this during every audit."></textarea>
         <p class="hint" id="app-plan-meta">The company improvement auditor treats this plan as the product north star. Missing features and plan gaps become improvement candidates.</p>
       </div>
+      <div class="card langfuse-card">
+        <div class="card-head">
+          <h2>Observability</h2>
+          <span class="status" id="langfuse-status">checking</span>
+        </div>
+        <p class="muted">Langfuse self-hosted stores traces, token/cost analytics, scores, datasets, and experiments. This control room keeps company operations, approvals, gates, artifacts, and rollback.</p>
+        <div class="row" style="margin:9px 0">
+          <a class="btn primary small" id="langfuse-open" href="http://127.0.0.1:3000" target="_blank" rel="noopener">Open Langfuse ↗</a>
+          <button class="btn ghost small" id="langfuse-refresh">Check connection</button>
+        </div>
+        <div id="langfuse-meta" class="muted">Checking Langfuse…</div>
+      </div>
       <div class="card eval-card">
         <div class="card-head">
           <h2>Evaluation lab</h2>
-          <span class="tag">LangSmith / local</span>
+          <span class="tag">Langfuse / local</span>
         </div>
-        <p class="muted">Compare direct build, company pipeline, and company + intent packet on frozen golden tasks. Experiments are stored locally and exported to LangSmith when configured.</p>
+        <p class="muted">Compare direct build, company pipeline, and company + intent packet on frozen golden tasks. Experiments are stored locally and exported to Langfuse when configured.</p>
         <div class="row" style="margin:9px 0">
           <select id="eval-lane" class="wide-select" style="max-width:360px"></select>
           <button class="btn primary small" id="eval-run">Run experiment</button>

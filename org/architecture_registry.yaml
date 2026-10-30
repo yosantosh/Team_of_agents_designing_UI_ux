@@ -1,10 +1,10 @@
-version: "1.0.4"
+version: "1.0.5"
 organization: "Native Android UI/UX Agentic Company"
 owner: "Dictator (Human Product Owner / Manager)"
 description: >
   A hierarchical, artifact-driven design organization that turns a Dictator decree
   into a designed, implemented, verified, and maintainable native Android experience.
-  LangGraph is the control plane; LangSmith is the flight recorder and eval lab;
+  LangGraph is the control plane; self-hosted Langfuse is the flight recorder and eval lab;
   the control room is the human interface.
 
 defaults:
@@ -102,7 +102,7 @@ tiers:
     name: "Quality, Safety & Release"
     purpose: "Visual, functional, accessibility, performance, security, T&S, release"
   - id: 5
-    name: "Meta, Memory & Evolution"
+    name: "Memory & Company Improvement"
     purpose: "Design ops, evals, org memory, independent evolution proposals"
 
 tier_leads:
@@ -241,7 +241,7 @@ agents:
     mission: "Manage Tier 5: org memory, design debt, evals, red-team, and independent evolution proposals. Never self-approve."
     inputs: [run_history, token_ledger, qa_reports, registry, eval_reports]
     outputs: [memory_update, eval_report, evolution_proposal]
-    tools: [company_knowledge, registry, analytics, langsmith_optional]
+    tools: [company_knowledge, registry, analytics, langfuse_optional]
     gates: [eval_review, evolution_approval]
     kpis: [memory_recall, eval_coverage, proposal_hit_rate]
     failure_modes: [change_for_change, self_approval, stale_memory]
@@ -667,7 +667,7 @@ agents:
     mission: "Build golden tasks, calibrate judges, run regressions, inject failures, test prompt injection, and score agents."
     inputs: [run_history, evals, traces, proposals]
     outputs: [eval_report, agent_scorecards, regression_alerts]
-    tools: [langsmith_optional, eval_harness, artifact_store]
+    tools: [langfuse_optional, eval_harness, artifact_store]
     gates: [eval_review]
     kpis: [eval_coverage, judge_calibration, regression_escape]
     failure_modes: [self_grading, benchmark_overfit, stale_evals]
@@ -682,7 +682,7 @@ agents:
     mission: "Observe traces, rework, cost, defects, and drift; propose evidence-backed org changes. Cannot apply changes or approve itself."
     inputs: [run_metrics, token_ledger, qa_reports, registry, eval_reports]
     outputs: [evolution_proposal, expected_impact, rollback_plan]
-    tools: [registry, analytics, langsmith_optional]
+    tools: [registry, analytics, langfuse_optional]
     gates: [evolution_approval]
     kpis: [proposal_hit_rate, cost_saved, quality_delta]
     failure_modes: [change_for_change, self_approval, unmeasured_claims]
@@ -905,6 +905,13 @@ evolution_history:
     change_type: "manual_config"
     target: "improvement_lab"
     summary: "Renamed Evolution to Company Improvement, added image capability to the coder alias, and bound the app plan plus golden-task evaluation to the improvement auditor."
+  - proposal_id: "manual_20261030_langfuse"
+    applied_at: "2026-10-30T14:00:00+00:00"
+    from_version: "1.0.4"
+    to_version: "1.0.5"
+    change_type: "manual_config"
+    target: "observability"
+    summary: "Replaced LangSmith with self-hosted Langfuse for traces, scores, datasets, experiments, and improvement evidence; local SQLite remains the fallback source of truth."
 
 metrics:
   - id: first_pass_yield

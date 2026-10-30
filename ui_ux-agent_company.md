@@ -7,7 +7,7 @@
 | Status | ACTIVE — v1.0 |
 | Owner | **Dictator (Human Product Owner / Manager)** |
 | Control plane | LangGraph |
-| Flight recorder / eval lab | LangSmith |
+| Flight recorder / eval lab | Langfuse |
 | Model gateway | OpenCode headless worker (`uiux-worker`) |
 | Android target | Kotlin + Jetpack Compose + Material 3, minSdk 24 / compileSdk 36 |
 | First project binding | Dhunchat / Orphic (`com.example.dhunchat`) |
@@ -26,7 +26,7 @@ This is not “a group of agents that chat.” It is a **design company with an 
 - **Versioned artifacts** are how agents communicate: product briefs, flows, tokens, screen specs, critiques, QA reports, release candidates. No long unstructured agent-to-agent transcripts.
 - **Surface pods** do the work: Feed, Profile, Messages, Create, Explore, Notifications, Onboarding/Settings, Media/Rooms, Safety.
 - **Independent gates** enforce quality: design critique, human design approval, visual QA, functional/a11y QA, performance, security/privacy, Trust & Safety, release.
-- **LangSmith** is the flight recorder and eval lab: traces, datasets, experiments, evaluators, annotation queues, Studio.
+- **Langfuse** is the flight recorder and eval lab: traces, datasets, experiments, evaluators, annotation queues, Studio.
 - **The control room** is the Dictator’s interface: org chart, live runs, approval inbox, target-vs-render review, token budget, and the Evolve/Improve workflow.
 - **The evolution graph** is a separate, audited change-management process. Agents may propose organizational changes; they may not approve or apply their own proposals.
 
@@ -45,12 +45,12 @@ The design goal is **human-governed autonomy**:
 | Control room | Implemented: dependency-free SPA served by FastAPI, live SSE, approvals, budget, artifacts, evolution |
 | Token ledger | Implemented: per-run/agent/model usage, budget summary, 80/95/100% policy hooks |
 | Android capture | Adapter contract + upload path; emulator/ADB harness is the production implementation |
-| LangSmith | Optional integration via environment; traces/evals are the production requirement |
+| Langfuse | Optional integration via environment; traces/evals are the production requirement |
 | Autonomous code commits | Not enabled by default; implementation produces a plan/patch contract. Code execution is a separate, explicitly approved worker path. |
 
 ### 1.2 The one-sentence operating rule
 
-> **LangGraph routes the work, Postgres/Git remember it, LangSmith measures it, the control room lets the Dictator govern it, and Android rendering — not code reading — proves it.**
+> **LangGraph routes the work, Postgres/Git remember it, Langfuse measures it, the control room lets the Dictator govern it, and Android rendering — not code reading — proves it.**
 
 ---
 
@@ -152,7 +152,7 @@ flowchart TB
   end
 
   subgraph OBS["OBSERVABILITY & EVOLUTION PLANE"]
-    LS["LangSmith<br/>traces · datasets · experiments"]
+    LS["Langfuse<br/>traces · datasets · experiments"]
     AUD["Org Evolution Auditor<br/>independent"]
     EVO["Evolve / Improve"]
     ORCH -.-> LS
@@ -560,7 +560,7 @@ flowchart LR
 
 ### 8.2 Inputs
 
-- LangSmith traces, eval scores, judge calibration, regression alerts.
+- Langfuse traces, eval scores, judge calibration, regression alerts.
 - Rework rate, first-pass yield, cycle time, defect escape rate, human override rate.
 - Token ledger: burn rate, cost per screen, top consumers, budget pressure.
 - Gate failures: critique issues, a11y defects, visual diff failures, missing evidence.
@@ -609,7 +609,7 @@ flowchart LR
 - **No self-approval.** The proposer, approver, and applier are different.
 - **Immutable base policy:** safety, approval policy, data access, release authority.
 - **Safe mutations only:** enable/disable agent, model alias swap, gate threshold, budget cap, pod composition. Structural changes require a code/deploy change.
-- **Shadow eval required** before approval. Production uses LangSmith experiments and a golden task set.
+- **Shadow eval required** before approval. Production uses Langfuse experiments and a golden task set.
 - **Canary required** for changes that affect routing, models, or gates.
 - **Rollback required.** Every proposal names the previous registry version and the restore command.
 - **Budget cap per evolution cycle.**
@@ -635,7 +635,7 @@ flowchart LR
 
 ### 8.5.1 Metric canary and rollback
 
-After a safe registry change is applied, the Evolution tab can run a small-scope metric canary over recent production runs. It records completed/escalated/failed counts, pass rate, scope, and verdict. A pass promotes the change; a fail exposes rollback. This is a metric heuristic, not a full LangSmith golden-task shadow eval.
+After a safe registry change is applied, the Evolution tab can run a small-scope metric canary over recent production runs. It records completed/escalated/failed counts, pass rate, scope, and verdict. A pass promotes the change; a fail exposes rollback. This is a metric heuristic, not a full Langfuse golden-task shadow eval.
 
 ### 8.6 Registry versioning
 
@@ -716,18 +716,22 @@ Do not stream raw chain-of-thought. Stream decisions, evidence, artifacts, and g
 
 ---
 
-## 10. LangSmith
+## 10. Langfuse
 
-LangSmith is the **flight recorder and eval lab**, not the control room.
+Langfuse is the **flight recorder and eval lab**, not the control room.
 
 ### 10.1 Tracing
 
 Set:
 
 ```bash
-LANGSMITH_TRACING=true
-LANGSMITH_API_KEY=lsv2_...
-LANGSMITH_PROJECT=uiux-agent-company
+LANGFUSE_ENABLED=true
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_BASE_URL=http://127.0.0.1:3000
+LANGFUSE_TRACING_ENVIRONMENT=local
+LANGFUSE_DATASET=uiux-golden-tasks
+LANGFUSE_PROJECT_ID=uiux-company-project
 ```
 
 Every LangGraph run should carry metadata:
@@ -755,7 +759,7 @@ This makes traces filterable by run, agent, model, project, and registry version
 
 ### 10.3 Studio
 
-LangSmith Studio is for graph debugging and step-through. The custom control room is for operations. Do not confuse them.
+Langfuse Studio is for graph debugging and step-through. The custom control room is for operations. Do not confuse them.
 
 ---
 
@@ -918,7 +922,7 @@ artifacts/
 - **Postgres** = LangGraph checkpoints, runs, approvals, audit, token ledger (production).
 - **SQLite** = local MVP equivalent.
 - **Object store / Git LFS** = large images, screenshots, target images.
-- **LangSmith** = traces, datasets, experiments, annotation.
+- **Langfuse** = traces, datasets, experiments, annotation.
 - **Mermaid source** = diagrams; generated SVG/PNG are build outputs, never edited.
 
 ### 13.1.1 Production adapters
@@ -1237,7 +1241,7 @@ This is the gap analysis the Dictator asked for. The original diagram had the ri
 - Enable Feed, Messages, Create, Explore, Notifications pods.
 - Add content designer, accessibility specialist, localization specialist, performance QA.
 - Add design-system versioning and component parity checks.
-- Add LangSmith datasets/experiments and a golden task set.
+- Add Langfuse datasets/experiments and a golden task set.
 
 **Exit:** 3+ pods shipping with the same gates; first-pass yield ≥ 0.60; no critical escapes.
 
@@ -1253,7 +1257,7 @@ This is the gap analysis the Dictator asked for. The original diagram had the ri
 
 ### Phase 6 — Evolution lab
 
-- Production LangSmith shadow evals.
+- Production Langfuse shadow evals.
 - Canary and rollback automation.
 - Model benchmarking per role.
 - Multi-project profiles.
@@ -1386,4 +1390,4 @@ python3 -m venv .venv
 
 **Budget note:** `100,000,000` tokens/month is a placeholder. Replace it in `org/budget_policy.yaml` and `UIUX_MONTHLY_TOKEN_BUDGET`.
 
-**Production note:** this repository is a local-first MVP. Production requires Postgres, object storage, auth/RBAC, sandboxed code workers, real emulator/device-farm capture, LangSmith datasets/experiments, and a deployed control room. The contracts and gates are designed for that upgrade.
+**Production note:** this repository is a local-first MVP. Production requires Postgres, object storage, auth/RBAC, sandboxed code workers, real emulator/device-farm capture, Langfuse datasets/experiments, and a deployed control room. The contracts and gates are designed for that upgrade.

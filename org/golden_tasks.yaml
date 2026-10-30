@@ -1,4 +1,4 @@
-# Golden tasks for LangSmith / local evaluation.
+# Golden tasks for Langfuse / local evaluation.
 # Keep prompts stable. Change the task ID when the acceptance criteria change.
 tasks:
   - id: homefeed_target_fidelity

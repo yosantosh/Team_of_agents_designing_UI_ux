@@ -16,6 +16,7 @@ from .artifacts import ArtifactStore
 from .config import Settings
 from .events import EventBus
 from .gateway import ModelGateway
+from .langfuse_trace import LangfuseTracer
 from .models import EvolutionProposal, new_id, utcnow
 from .prompts import work_label
 from .registry import Registry, load_profile, load_registry, save_yaml
@@ -48,6 +49,7 @@ class EvolutionEngine:
         artifacts: ArtifactStore | None = None,
         gateway: ModelGateway | None = None,
         agents: AgentRunner | None = None,
+        tracer: LangfuseTracer | None = None,
     ):
         self.settings = settings or Settings.from_env()
         self.registry = registry or load_registry(self.settings)
@@ -55,8 +57,11 @@ class EvolutionEngine:
         self.storage = storage or Storage(self.settings.storage_db)
         self.bus = bus or EventBus(self.storage)
         self.artifacts = artifacts or ArtifactStore(self.settings, self.storage)
+        self.tracer = tracer or LangfuseTracer(self.settings)
         self.gateway = gateway or ModelGateway(self.settings, self.registry, self.storage)
-        self.agents = agents or AgentRunner(self.gateway, self.registry)
+        self.agents = agents or AgentRunner(self.gateway, self.registry, tracer=self.tracer)
+        if getattr(self.agents, "tracer", None) is None:
+            self.agents.tracer = self.tracer
         self._cm = None
         self.checkpointer = None
         self.graph = None
@@ -104,14 +109,19 @@ class EvolutionEngine:
         builder.add_edge("reject", END)
         return builder.compile(checkpointer=self.checkpointer)
 
-    def _config(self, proposal_id: str) -> dict[str, Any]:
-        return {"configurable": {"thread_id": f"evo-{proposal_id}"}}
+    def _config(self, proposal_id: str, trace_id: str | None = None) -> dict[str, Any]:
+        config: dict[str, Any] = {"configurable": {"thread_id": f"evo-{proposal_id}"}}
+        if trace_id:
+            callbacks = self.tracer.langchain_callbacks(trace_id)
+            if callbacks:
+                config["callbacks"] = callbacks
+        return config
 
     async def _event(self, proposal_id: str, event_type: str, message: str, agent_id: str | None = None, data: dict[str, Any] | None = None):
         await self.bus.publish(proposal_id, event_type, message, agent_id, data)
 
     async def _observe(self, state: EvolutionState) -> dict[str, Any]:
-        await self._event(state["proposal_id"], "evolution.started", "Evolution audit started", "org_evolution_auditor")
+        await self._event(state["proposal_id"], "evolution.started", "Company improvement audit started", "org_evolution_auditor")
         runs = self.storage.list_runs(30)
         statuses: dict[str, int] = {}
         rework: dict[str, int] = {}
@@ -140,6 +150,7 @@ class EvolutionEngine:
             ],
             "app_plan": plan_context(self.settings, self.profile),
             "eval_experiments": self.storage.list_eval_experiments(10),
+            "langfuse": self.tracer.summary(),
         }
         await self._event(state["proposal_id"], "evolution.observed", "Metrics collected", "org_evolution_auditor", metrics)
         return {"metrics": metrics, "status": "diagnose"}
@@ -200,13 +211,17 @@ class EvolutionEngine:
         proposal.setdefault("status", "pending_approval")
         proposal.setdefault("created_at", utcnow())
         proposal["metrics"] = state.get("metrics", {})
+        proposal["langfuse_trace_id"] = state.get("langfuse_trace_id")
+        proposal["langfuse_trace_url"] = state.get("langfuse_trace_url") or self.tracer.trace_url(
+            state.get("langfuse_trace_id")
+        )
         EvolutionProposal.model_validate(proposal)
         self.storage.create_evolution(proposal, focus=state.get("focus", "quality"))
         self.artifacts.write_json(state["proposal_id"], "evolution_proposal.json", proposal, created_by="org_evolution_auditor")
         await self._event(
             state["proposal_id"],
             "evolution.proposed",
-            proposal.get("title", "Evolution proposal"),
+            proposal.get("title", "Improvement proposal"),
             "org_evolution_auditor",
             {"proposal": proposal},
         )
@@ -244,7 +259,7 @@ class EvolutionEngine:
                 {"check": "rollback_plan_present", "status": "pass" if proposal.get("rollback_plan") else "fail"},
                 {"check": "eval_plan_present", "status": "pass" if proposal.get("eval_plan") else "fail"},
             ],
-            "note": "MVP heuristic. Production must run the golden-task shadow eval with LangSmith experiments before approval.",
+            "note": "MVP heuristic. Use the golden-task Evaluation Lab and Langfuse experiment evidence before approval.",
         }
         self.storage.update_evolution(state["proposal_id"], status="pending_approval", evaluation=evaluation, proposal={**proposal, "status": "pending_approval"})
         self.artifacts.write_json(state["proposal_id"], "evolution_evaluation.json", evaluation, created_by="eval_red_team")
@@ -261,7 +276,7 @@ class EvolutionEngine:
         approval = self.storage.pending_approval_for_run(state["proposal_id"], "evolution_approval")
         risk = proposal.get("expected_impact", {}).get("risk") if isinstance(proposal.get("expected_impact"), dict) else ""
         summary = (
-            f"The company wants to change how it works: {proposal.get('title', 'Evolution proposal')}. "
+            f"The company wants to change how it works: {proposal.get('title', 'Improvement proposal')}. "
             f"Risk: {risk or 'not stated'}. Open details for the exact change, evidence, and rollback plan."
         )
         change_lines = []
@@ -286,7 +301,7 @@ class EvolutionEngine:
             approval = self.storage.create_approval(
                 state["proposal_id"],
                 "evolution_approval",
-                "Approve org evolution",
+                "Approve company improvement",
                 summary,
                 [
                     {"option_id": "approve", "label": "Approve and apply safe changes", "impact": "Registry version bumps; structural changes still require a deploy."},
@@ -301,7 +316,7 @@ class EvolutionEngine:
         await self._event(
             state["proposal_id"],
             "approval.required",
-            "Evolution approval required",
+            "Company improvement approval required",
             "dictator",
             {
                 "approval_id": approval["approval_id"],
@@ -316,7 +331,7 @@ class EvolutionEngine:
                 "type": "evolution_approval",
                 "proposal_id": state["proposal_id"],
                 "approval_id": approval["approval_id"],
-                "title": "Approve org evolution",
+                "title": "Approve company improvement",
                 "summary": summary,
                 "details": details,
                 "proposal": proposal,
@@ -385,16 +400,39 @@ class EvolutionEngine:
     ) -> dict[str, Any]:
         await self._ensure_graph()
         proposal_id = proposal_id or new_id("evo")
-        initial: EvolutionState = {
-            "proposal_id": proposal_id,
-            "focus": focus,
-            "auto_approve": auto_approve,
-            "backend": backend or self.settings.model_backend,
-            "model": model or self.settings.model_override,
-            "status": "observe",
-        }
-        result = await self.graph.ainvoke(initial, self._config(proposal_id))
-        clean = self._sanitize(dict(result))
+        with self.tracer.run_trace(
+            run_id=proposal_id,
+            mode="improvement",
+            prompt=f"Company improvement audit: {focus}",
+            metadata={
+                "proposal_id": proposal_id,
+                "focus": focus,
+                "registry_version": self.registry.version,
+            },
+            tags=["improvement", f"registry-{self.registry.version}"],
+        ) as trace:
+            initial: EvolutionState = {
+                "proposal_id": proposal_id,
+                "focus": focus,
+                "auto_approve": auto_approve,
+                "backend": backend or self.settings.model_backend,
+                "model": model or self.settings.model_override,
+                "status": "observe",
+            }
+            if trace is not None and trace.trace_id:
+                initial["langfuse_trace_id"] = trace.trace_id
+                if trace.url:
+                    initial["langfuse_trace_url"] = trace.url
+            result = await self.graph.ainvoke(
+                initial,
+                self._config(proposal_id, trace_id=getattr(trace, "trace_id", None)),
+            )
+            clean = self._sanitize(dict(result))
+            if trace is not None and trace.trace_id:
+                clean["langfuse_trace_id"] = trace.trace_id
+                if trace.url:
+                    clean["langfuse_trace_url"] = trace.url
+                trace.update(output={"status": clean.get("status"), "proposal_id": proposal_id})
         self.artifacts.write_json(proposal_id, "evolution_state.json", clean, created_by="org_evolution_auditor")
         return clean
 
@@ -422,7 +460,7 @@ class EvolutionEngine:
             "pass_rate": round(pass_rate, 3),
             "verdict": verdict,
             "evaluated_at": utcnow(),
-            "note": "Automated metric canary over recent production runs. Production should use LangSmith golden tasks for a full shadow eval.",
+            "note": "Automated metric pilot over recent production runs. Use Langfuse golden-task experiments for a full shadow eval.",
         }
         proposal = dict(existing.get("proposal") or {})
         proposal["canary"] = canary
@@ -455,7 +493,7 @@ class EvolutionEngine:
             proposal=proposal,
             decision={"decision": "promote", "notes": "Canary promoted."},
         )
-        await self.bus.publish(proposal_id, "evolution.promoted", "Evolution promoted", "dictator")
+        await self.bus.publish(proposal_id, "evolution.promoted", "Improvement adopted", "dictator")
         return {"proposal_id": proposal_id, "status": "promoted"}
 
     async def rollback(self, proposal_id: str) -> dict[str, Any]:
@@ -490,7 +528,7 @@ class EvolutionEngine:
         if existing:
             proposal = dict(existing.get("proposal") or {})
             if proposal.get("title") in {"Evolution audit running", "Evolution audit starting"}:
-                proposal["title"] = "Evolution stopped before proposal"
+                proposal["title"] = "Improvement stopped before proposal"
                 proposal["problem"] = "The Dictator stopped the audit before the independent auditor produced a proposal."
                 proposal["status"] = "stopped"
             self.storage.update_evolution(
@@ -503,8 +541,8 @@ class EvolutionEngine:
             self.storage.create_evolution(
                 {
                     "proposal_id": proposal_id,
-                    "title": "Evolution stopped before proposal",
-                    "problem": "The Dictator stopped the evolution run before the auditor produced a proposal.",
+                    "title": "Improvement stopped before proposal",
+                    "problem": "The Dictator stopped the improvement audit before the auditor produced a proposal.",
                     "evidence": [],
                     "changes": [],
                     "expected_impact": {},
@@ -518,7 +556,7 @@ class EvolutionEngine:
         await self.bus.publish(
             proposal_id,
             "evolution.stopped",
-            "Evolution stopped by Dictator",
+            "Improvement audit stopped by Dictator",
             "dictator",
             {"proposal_id": proposal_id},
         )
@@ -526,8 +564,23 @@ class EvolutionEngine:
 
     async def resume(self, proposal_id: str, decision: dict[str, Any]) -> dict[str, Any]:
         await self._ensure_graph()
-        result = await self.graph.ainvoke(Command(resume=decision), self._config(proposal_id))
-        clean = self._sanitize(dict(result))
+        with self.tracer.run_trace(
+            run_id=proposal_id,
+            mode="improvement",
+            prompt="Company improvement decision",
+            metadata={"proposal_id": proposal_id, "resumed": True},
+            tags=["improvement", "resume"],
+        ) as trace:
+            result = await self.graph.ainvoke(
+                Command(resume=decision),
+                self._config(proposal_id, trace_id=getattr(trace, "trace_id", None)),
+            )
+            clean = self._sanitize(dict(result))
+            if trace is not None and trace.trace_id:
+                clean["langfuse_trace_id"] = trace.trace_id
+                if trace.url:
+                    clean["langfuse_trace_url"] = trace.url
+                trace.update(output={"status": clean.get("status"), "decision": decision})
         self.artifacts.write_json(proposal_id, "evolution_state.json", clean, created_by="org_evolution_auditor")
         return clean
 

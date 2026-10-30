@@ -336,6 +336,11 @@ body.flow-full .flow-card { height: calc(100vh - 92px); display: flex; flex-dire
 body.flow-full .flow-canvas { flex: 1; height: auto; min-height: 0; }
 body.flow-full .flow-toolbar { margin-bottom: 8px; }
 
+/* Langfuse observability */
+.langfuse-card .btn { text-decoration: none; }
+.langfuse-card #langfuse-meta { display: grid; gap: 3px; font-size: 10.5px; line-height: 1.5; }
+.langfuse-card #langfuse-meta b { color: var(--text); font-weight: 600; margin-right: 5px; }
+
 /* App plan / evaluation */
 .app-plan-card textarea { min-height: 240px; font-family: var(--mono); font-size: 10.5px; line-height: 1.55; }
 .app-plan-card input { margin-top: 8px; }

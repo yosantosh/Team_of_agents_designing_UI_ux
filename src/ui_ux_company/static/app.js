@@ -14,6 +14,7 @@ const state = {
   history: [],
   historyFilter: "all",
   appPlan: null,
+  langfuse: null,
   evalTasks: [],
   evalLanes: {},
   evalExperiments: [],
@@ -234,8 +235,10 @@ async function init() {
     state.settings = settings;
     state.projects = projects.projects || [];
     state.history = history.history || [];
+    state.langfuse = health.langfuse || null;
     await loadModels(false);
     renderAll();
+    checkLangfuse(false);
     const initialTab = state.flowFull ? "flow" : location.hash.replace("#", "");
     if (initialTab) switchTab(initialTab);
     const requestedRun = params.get("run");
@@ -320,6 +323,7 @@ function renderAll() {
   renderRunMeta();
   renderFlow();
   renderEvolution();
+  renderLangfuse();
 }
 
 // ------------------------------------------------------------------ header
@@ -328,7 +332,67 @@ function renderHealth() {
   if (!h) return;
   const b = h.budget || state.budget;
   if (b) $("budget-pill").textContent = `Budget ${b.used_pct}% · ${fmtNumber(b.remaining_tokens)} tokens left`;
-  $("footer-status").textContent = `registry ${h.registry_version} · autonomy ${h.autonomy_level} · visual QA ${h.visual_qa_backend} · Roborazzi: ${h.roborezzi ? "on" : "off"}`;
+  const lf = state.langfuse || h.langfuse || {};
+  const lfLabel = lf.connected ? "connected" : (lf.configured || lf.enabled ? "unavailable" : "disabled");
+  $("footer-status").textContent = `registry ${h.registry_version} · autonomy ${h.autonomy_level} · visual QA ${h.visual_qa_backend} · Langfuse ${lfLabel} · Roborazzi: ${h.roborezzi ? "on" : "off"}`;
+}
+
+function langfuseBase() {
+  return (state.langfuse?.base_url || state.health?.langfuse?.base_url || "http://127.0.0.1:3000").replace(/\/$/, "");
+}
+
+function langfuseTraceUrl(traceId, storedUrl) {
+  if (storedUrl) return storedUrl;
+  if (!traceId) return null;
+  const project = state.langfuse?.project_id || state.health?.langfuse?.project_id;
+  return project ? `${langfuseBase()}/project/${encodeURIComponent(project)}/traces/${encodeURIComponent(traceId)}` : null;
+}
+
+function langfuseLink(traceId, storedUrl, label = "Open trace in Langfuse ↗") {
+  const url = langfuseTraceUrl(traceId, storedUrl);
+  if (!url) return "";
+  return `<a class="btn ghost small" href="${escapeHtml(url)}" target="_blank" rel="noopener" title="${escapeHtml(traceId || "")}">${escapeHtml(label)}</a>`;
+}
+
+function renderLangfuse() {
+  const lf = state.langfuse || state.health?.langfuse || {};
+  const status = $("langfuse-status");
+  const meta = $("langfuse-meta");
+  const open = $("langfuse-open");
+  if (!status || !meta) return;
+  const connected = lf.connected === true;
+  const configured = lf.configured !== false && lf.enabled !== false;
+  const label = connected ? "connected" : (configured ? "unavailable" : "disabled");
+  status.textContent = label;
+  status.className = `status ${connected ? "completed" : (configured ? "failed" : "")}`;
+  if (open) open.href = langfuseBase();
+  const project = lf.project_id || "not configured";
+  const latestExperiment = (state.evalExperiments || []).find((item) => item.langfuse_experiment_url);
+  const tracedRuns = (state.runs || []).filter((run) => run.state?.langfuse_trace_id || run.langfuse_trace_id).length;
+  meta.innerHTML = `
+    <div><b>Base URL</b> ${escapeHtml(lf.base_url || langfuseBase())}</div>
+    <div><b>Dataset</b> ${escapeHtml(lf.dataset || "uiux-golden-tasks")}</div>
+    <div><b>Project</b> ${escapeHtml(project)}</div>
+    <div><b>Environment</b> ${escapeHtml(lf.environment || "local")}</div>
+    <div><b>Known traces</b> ${tracedRuns} ${tracedRuns ? "(from local run history)" : ""}</div>
+    ${latestExperiment ? `<div><b>Latest experiment</b> <a href="${escapeHtml(latestExperiment.langfuse_experiment_url)}" target="_blank" rel="noopener">${escapeHtml(latestExperiment.langfuse_experiment_id || "open")} ↗</a></div>` : ""}
+    <div><b>Last check</b> ${escapeHtml(lf.checked_at ? fmtTime(lf.checked_at) : "not checked")}</div>
+    <div class="muted">${escapeHtml(lf.reason || (connected ? "Traces, scores, datasets, and experiments are streaming to Langfuse." : "Set LANGFUSE_* in .env to enable tracing."))}</div>
+  `;
+}
+
+async function checkLangfuse(refresh = true, notify = true) {
+  try {
+    state.langfuse = await api(`/api/langfuse/health${refresh ? "?refresh=1" : ""}`);
+    renderLangfuse();
+    renderRuns();
+    renderHistory();
+    renderRunMeta();
+    if (state.agentWindowId) renderAgentWindow();
+    if (notify) toast(`Langfuse: ${state.langfuse.status || "unknown"}`);
+  } catch (error) {
+    if (notify) toast(`Langfuse health error: ${error.message}`, "error");
+  }
 }
 
 function renderBudget() {
@@ -451,10 +515,13 @@ function renderRunMeta() {
     values.eval_gate ? `eval:${values.eval_gate}` : null,
     values.qa_gate ? `qa:${values.qa_gate}` : null,
   ].filter(Boolean).join(" · ");
+  const traceId = values.langfuse_trace_id || (run.state && run.state.langfuse_trace_id);
+  const traceUrl = values.langfuse_trace_url || (run.state && run.state.langfuse_trace_url);
   $("run-meta").innerHTML = `
     <b>${escapeHtml(run.run_id)}</b> · ${escapeHtml(run.mode)} · ${escapeHtml(run.status)}
     ${gates ? `<br><span class="muted">${escapeHtml(gates)}</span>` : ""}
     <br><span class="muted">${escapeHtml(short(run.prompt, 240))}</span>
+    ${traceId ? `<div style="margin-top:7px">${langfuseLink(traceId, traceUrl)} <span class="muted">${escapeHtml(short(traceId, 20))}</span></div>` : ""}
   `;
 }
 
@@ -505,24 +572,28 @@ function renderHistory() {
   const list = $("history-list");
   if (!list) return;
   const items = (state.history || []).filter((item) => state.historyFilter === "all" || item.kind === state.historyFilter);
-  list.innerHTML = items.length ? items.map((item) => `
+  list.innerHTML = items.length ? items.map((item) => {
+    const traceUrl = langfuseTraceUrl(item.langfuse_trace_id, item.langfuse_trace_url);
+    return `
     <div class="item clickable" data-history-kind="${escapeHtml(item.kind)}" data-history-id="${escapeHtml(item.id)}">
       <div class="title">${escapeHtml(item.title)}</div>
       <div class="meta">
         <span class="badge ${statusClass(item.status)}">${escapeHtml(item.status)}</span>
-        <span>${item.kind === "evolution" ? "evolution" : "company"}</span>
+        <span>${item.kind === "evolution" ? "improvement" : "company"}</span>
         <span>${escapeHtml(item.mode || "")}</span>
         <span>${fmtTime(item.created_at)}</span>
+        ${traceUrl ? `<a href="${escapeHtml(traceUrl)}" target="_blank" rel="noopener">Langfuse ↗</a>` : ""}
       </div>
       ${item.kind === "company" ? `<div class="history-actions">
         ${item.has_code ? `<button class="btn ghost small" data-history-undo="${escapeHtml(item.id)}" title="Undo the code changes from this run">Undo code</button>` : ""}
         <button class="btn danger small" data-history-delete="${escapeHtml(item.id)}" title="Delete this run and its saved data">Delete</button>
       </div>` : ""}
     </div>
-  `).join("") : `<div class="muted">No history entries for this filter.</div>`;
+  `;
+  }).join("") : `<div class="muted">No history entries for this filter.</div>`;
   list.querySelectorAll("[data-history-id]").forEach((el) => {
     el.addEventListener("click", (event) => {
-      if (event.target.closest("[data-history-undo], [data-history-delete]")) return;
+      if (event.target.closest("a, [data-history-undo], [data-history-delete]")) return;
       if (el.dataset.historyKind === "evolution") loadHistoryEvolution(el.dataset.historyId);
       else loadHistoryRun(el.dataset.historyId);
     });
@@ -601,18 +672,27 @@ function renderRuns() {
   if (!runs.length) {
     list.innerHTML = `<div class="muted">No production runs yet. Issue a decree.</div>`;
   } else {
-    list.innerHTML = runs.slice(0, 12).map((run) => `
+    list.innerHTML = runs.slice(0, 12).map((run) => {
+      const traceId = run.state?.langfuse_trace_id || run.langfuse_trace_id;
+      const traceUrl = langfuseTraceUrl(traceId, run.state?.langfuse_trace_url || run.langfuse_trace_url);
+      return `
       <div class="item clickable" data-run="${escapeHtml(run.run_id)}">
         <div class="title">${escapeHtml(short(run.prompt, 120))}</div>
         <div class="meta">
           <span class="badge ${statusClass(run.status)}">${escapeHtml(run.status)}</span>
           <span>${escapeHtml(run.mode)}</span>
           <span>${fmtTime(run.created_at)}</span>
+          ${traceUrl ? `<a href="${escapeHtml(traceUrl)}" target="_blank" rel="noopener">Langfuse ↗</a>` : ""}
         </div>
       </div>
-    `).join("");
+    `;
+    }).join("");
     list.querySelectorAll("[data-run]").forEach((el) => {
-      el.addEventListener("click", () => { loadRun(el.dataset.run, true); switchTab("flow"); });
+      el.addEventListener("click", (event) => {
+        if (event.target.closest("a")) return;
+        loadRun(el.dataset.run, true);
+        switchTab("flow");
+      });
     });
   }
   fillRunSelect($("flow-run-select"), state.flowRunId || state.runId);
@@ -1235,6 +1315,10 @@ function renderAgentWindow() {
     ? "Dictator · Human Product Owner"
     : `${agent.codename || ""} · ${agent.title || agent.id}`;
   $("agent-live-sub").textContent = `${status} · ${agentId === "dictator" ? "final authority" : (agent.model || "agent")}`;
+  const runValues = state.runState?.values || state.run?.state || {};
+  const traceLink = runValues.langfuse_trace_id
+    ? `${langfuseLink(runValues.langfuse_trace_id, runValues.langfuse_trace_url, "Open agent trace in Langfuse ↗")}`
+    : "";
   $("agent-live-body").innerHTML = `
     <div class="kv" style="margin-bottom:8px">
       <span>Status</span><b class="badge ${statusClass(status)}">${escapeHtml(status)}</b>
@@ -1242,6 +1326,7 @@ function renderAgentWindow() {
       <span>Tokens</span><b>${fmtNumber(usage)}</b>
       <span>Connections</span><b>${messages.length}</b>
     </div>
+    ${traceLink ? `<div style="margin-bottom:8px">${traceLink}</div>` : ""}
     <div class="agent-now">${escapeHtml(current)}</div>
     <h3>Live activity</h3>
     <div class="timeline">${liveEvents || `<div class="muted">No events yet.</div>`}</div>
@@ -1870,9 +1955,11 @@ function renderEvalExperiments() {
         ${metrics.avg_critic_score != null ? `<span>score ${Number(metrics.avg_critic_score).toFixed(2)}</span>` : ""}
         ${metrics.total_tokens ? `<span>${fmtNumber(metrics.total_tokens)} tokens</span>` : ""}
         ${running ? `<span class="badge running">running</span>` : ""}
+        ${experiment.langfuse_status ? `<span class="badge">langfuse ${escapeHtml(experiment.langfuse_status)}</span>` : ""}
       </div>
       ${metrics.error ? `<div class="doing">${escapeHtml(short(metrics.error, 200))}</div>` : ""}
-      ${metrics.langsmith?.enabled ? `<div class="doing">LangSmith: ${escapeHtml(metrics.langsmith.dataset || "logged")}</div>` : ""}
+      ${experiment.langfuse_experiment_id ? `<div class="doing">Langfuse experiment: ${escapeHtml(experiment.langfuse_experiment_id)} ${experiment.langfuse_experiment_url ? `<a href="${escapeHtml(experiment.langfuse_experiment_url)}" target="_blank" rel="noopener">Open ↗</a>` : ""}</div>` : ""}
+      ${metrics.langfuse?.reason ? `<div class="doing">${escapeHtml(short(metrics.langfuse.reason, 220))}</div>` : ""}
     </div>`;
   }).join("") : `<div class="muted">No evaluation experiments yet. Run one above.</div>`;
 }
@@ -2645,6 +2732,7 @@ $("evolve-btn").addEventListener("click", () => {
     startEvolution();
   }
 });
+$("langfuse-refresh").addEventListener("click", () => checkLangfuse(true));
 $("app-plan-find").addEventListener("click", findAppPlans);
 $("app-plan-load").addEventListener("click", () => loadAppPlan($("app-plan-path").value.trim()));
 $("app-plan-save").addEventListener("click", saveAppPlan);

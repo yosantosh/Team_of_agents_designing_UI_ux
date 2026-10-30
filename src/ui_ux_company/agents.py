@@ -5,14 +5,22 @@ from pathlib import Path
 from typing import Any
 
 from .gateway import ModelGateway
+from .langfuse_trace import LangfuseTracer
 from .models import AgentResult
 from .registry import Registry
 
 
 class AgentRunner:
-    def __init__(self, gateway: ModelGateway, registry: Registry):
+    def __init__(
+        self,
+        gateway: ModelGateway,
+        registry: Registry,
+        *,
+        tracer: LangfuseTracer | None = None,
+    ):
         self.gateway = gateway
         self.registry = registry
+        self.tracer = tracer
 
     def title(self, role: str) -> str:
         try:
@@ -32,16 +40,64 @@ class AgentRunner:
         backend: str | None = None,
         model: str | None = None,
     ) -> AgentResult:
-        result = await self.gateway.generate(
-            role,
-            goal,
-            context,
-            images=images,
-            run_id=run_id,
-            task_id=task_id,
-            backend=backend,
-            model_override=model,
-        )
+        span_input = {
+            "goal": goal,
+            "context_keys": sorted(context.keys()),
+            "images": len(images or []),
+        }
+        if self.tracer is None:
+            result = await self.gateway.generate(
+                role,
+                goal,
+                context,
+                images=images,
+                run_id=run_id,
+                task_id=task_id,
+                backend=backend,
+                model_override=model,
+            )
+        else:
+            with self.tracer.span(
+                f"agent:{role}",
+                as_type="agent",
+                input=span_input,
+                metadata={"role": role, "run_id": run_id, "task_id": task_id},
+                model=model,
+            ) as span:
+                result = await self.gateway.generate(
+                    role,
+                    goal,
+                    context,
+                    images=images,
+                    run_id=run_id,
+                    task_id=task_id,
+                    backend=backend,
+                    model_override=model,
+                )
+                usage_details = {
+                    "input": int(result.input_tokens or 0),
+                    "output": int(result.output_tokens or 0),
+                }
+                total = int(result.input_tokens or 0) + int(result.output_tokens or 0)
+                if total:
+                    usage_details["total"] = total
+                cost_details = {"total": float(result.cost_usd)} if result.cost_usd else None
+                self.tracer.update_span(
+                    span,
+                    output={
+                        "text": (result.text or "")[:4000],
+                        "data_keys": sorted((result.data or {}).keys()),
+                    },
+                    usage_details=usage_details,
+                    cost_details=cost_details,
+                    metadata={
+                        "model": result.model,
+                        "duration_ms": result.duration_ms,
+                        "estimated": result.estimated,
+                        "cached_tokens": result.cached_tokens,
+                        "reasoning_tokens": result.reasoning_tokens,
+                    },
+                )
         return AgentResult(
             role=role,
             data=result.data or {"raw_text": result.text},
