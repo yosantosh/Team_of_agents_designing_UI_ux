@@ -683,7 +683,9 @@ class Storage:
                 state = json.loads(row.get("state_json") or "{}")
             except json.JSONDecodeError:
                 state = {}
-            if isinstance(state, dict) and state.get("backend") == "mock":
+            if isinstance(state, dict) and (
+                state.get("backend") == "mock" or state.get("demo") is True
+            ):
                 mock_ids.append(str(row["run_id"]))
         counts = {
             "runs": 0,
