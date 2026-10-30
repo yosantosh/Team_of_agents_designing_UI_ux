@@ -438,6 +438,7 @@ class CompanyGraph:
                 "model": state.get("model") or self.settings.model_override or "registry default",
                 "work_label": work_label(role),
                 "task_id": role,
+                "images": len(images or []),
             },
         )
         started = time.monotonic()

@@ -837,10 +837,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "created_at": run.get("created_at"),
                     "mode": run.get("mode"),
                     "project_id": state.get("project_id") if isinstance(state, dict) else None,
-                    "has_code": bool(
-                        (state.get("implementation") or {}).get("code_edits")
-                        if isinstance(state, dict) else False
-                    ) or bool(storage.get_artifact(run["run_id"], "code_edit_result.json")),
+                    "has_code": (
+                        not (isinstance(state, dict) and state.get("rollback"))
+                        and (
+                            bool(
+                                (state.get("implementation") or {}).get("code_edits")
+                                if isinstance(state, dict) else False
+                            )
+                            or bool(storage.get_artifact(run["run_id"], "code_edit_result.json"))
+                        )
+                    ),
                 }
             )
         for proposal in storage.list_evolutions(limit):

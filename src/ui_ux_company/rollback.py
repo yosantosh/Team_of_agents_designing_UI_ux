@@ -58,6 +58,14 @@ class RollbackService:
         run = self.storage.get_run(run_id)
         if not run:
             raise RollbackError("run not found")
+        if isinstance(run.get("state"), dict) and run["state"].get("rollback"):
+            return {
+                "run_id": run_id,
+                "run_status": run.get("status"),
+                "action": "none",
+                "reason": "run already rolled back",
+                "has_patch": False,
+            }
         code = self.code_result(run_id)
         patch = self.storage.get_artifact(run_id, "code_diff.patch")
         worktree = Path(str(code.get("worktree"))) if code.get("worktree") else None

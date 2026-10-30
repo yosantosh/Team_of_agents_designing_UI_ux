@@ -331,6 +331,7 @@ class CodeWorker:
                 "within_budget": (intent_packet.get("meta") or {}).get("within_budget"),
             } if intent_packet else None,
             "intent_coverage": intent_coverage,
+            "image_count": len(images or []),
         }
         self.artifacts.write_json(run_id, "code_edit_result.json", result, created_by="code_worker")
         return result
