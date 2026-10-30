@@ -138,3 +138,80 @@ def test_worker_can_be_disabled(settings, tmp_path, monkeypatch):
         assert not (repo / "probe.txt").exists()
     finally:
         storage.close()
+
+
+def test_worker_injects_intent_packet_and_parses_coverage(settings, tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "target")
+    script = tmp_path / "fake-opencode-coverage"
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "from pathlib import Path\n"
+        "Path('probe.txt').write_text('EDITED', encoding='utf-8')\n"
+        "Path('prompt-seen.txt').write_text(sys.argv[-1], encoding='utf-8')\n"
+        "payload = {'intent_coverage': [{'id': 'NN-1', 'status': 'implemented', 'evidence': 'probe.txt'}]}\n"
+        "print(json.dumps({'type': 'text', 'part': {'text': 'done\\n' + json.dumps(payload)}}))\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    worker, storage = _worker(settings, monkeypatch, script)
+    packet = {
+        "version": "1.0",
+        "non_negotiables": [{"id": "NN-1", "text": "Keep the OLED black canvas"}],
+        "sources": [{"artifact": "product_brief.json", "sha256": "abc"}],
+        "meta": {"within_budget": True},
+    }
+    try:
+        result = asyncio.run(
+            worker.apply(
+                "run_packet",
+                repo,
+                "Implement the approved design",
+                {"implementation_plan": {"files": [{"path": "probe.txt"}]}},
+                intent_packet=packet,
+            )
+        )
+        assert result["status"] == "edited"
+        assert result["intent_coverage"][0]["id"] == "NN-1"
+        assert result["intent_packet"]["version"] == "1.0"
+        prompt_seen = (Path(result["worktree"]) / "prompt-seen.txt").read_text(encoding="utf-8")
+        assert "APPROVED INTENT PACKET" in prompt_seen
+        assert "IMPLEMENTATION PLAN" in prompt_seen
+        assert "NN-1" in prompt_seen
+        assert (settings.artifact_dir("run_packet") / "intent_coverage.json").exists()
+    finally:
+        storage.close()
+
+
+def test_worker_does_not_truncate_packet_or_implementation_plan(settings, tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "target")
+    script = tmp_path / "fake-opencode-large"
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "Path('probe.txt').write_text('EDITED', encoding='utf-8')\n"
+        "Path('prompt-seen.txt').write_text(sys.argv[-1], encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    worker, storage = _worker(settings, monkeypatch, script)
+    packet = {"version": "1.0", "blob": "A" * 70000, "meta": {"within_budget": True}}
+    plan = {"blob": "B" * 20000}
+    try:
+        result = asyncio.run(
+            worker.apply(
+                "run_large",
+                repo,
+                "Implement the approved design",
+                {"implementation_plan": plan},
+                intent_packet=packet,
+            )
+        )
+        prompt_seen = (Path(result["worktree"]) / "prompt-seen.txt").read_text(encoding="utf-8")
+        assert "A" * 1000 in prompt_seen
+        assert "B" * 1000 in prompt_seen
+        assert "intent packet truncated" not in prompt_seen
+        assert "implementation plan truncated" not in prompt_seen
+    finally:
+        storage.close()

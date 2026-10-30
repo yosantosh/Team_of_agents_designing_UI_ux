@@ -17,6 +17,7 @@ from .codeworker import CodeWorker
 from .config import Settings
 from .events import EventBus
 from .gateway import ModelGateway
+from .intent import build_intent_packet
 from .models import new_id, utcnow
 from .prompts import work_label
 from .registry import BudgetPolicy, ProjectProfile, Registry, load_budget, load_profile, load_registry
@@ -776,6 +777,8 @@ class CompanyGraph:
                 "screen_spec": state.get("screen_spec", {}),
                 "implementation": state.get("implementation", {}),
                 "project": self.profile.project,
+                "repo_path": self.profile.project.get("repo") or str(self.settings.project_dir or ""),
+                "repo_tool_policy": "read-only inspection is allowed; do not edit or run shell commands",
             },
         )
         reviews = dict(state.get("tier_reviews", {}))
@@ -1076,24 +1079,68 @@ class CompanyGraph:
             return {"implementation": data, "status": "qa"}
         self._set_status(state, "implementation")
         await self._event(state, "stage.started", "Compose implementation plan", "compose_implementer")
+        intent_packet: dict[str, Any] | None = None
+        plan_context: dict[str, Any] = {
+            "change_request": state.get("change_request", {}),
+            "design_contract": state.get("design_contract", {}),
+            "screen_spec": state.get("screen_spec", {}),
+            "design_tokens": state.get("design_tokens", {}),
+            "synthesis": state.get("synthesis", {}),
+            "project": self.profile.project,
+            "mode": state.get("mode"),
+            "demo": state.get("demo", False),
+        }
+        if state.get("mode") in {"build", "ship", "fix"}:
+            try:
+                intent_packet = build_intent_packet(
+                    state,
+                    max_chars=int(getattr(self.settings, "intent_packet_max_chars", 160000)),
+                )
+                await self._write(state, "intent_packet.json", intent_packet, "chief_orchestrator")
+                await self._event(
+                    state,
+                    "intent.packet.ready",
+                    f"Intent packet ready ({intent_packet.get('meta', {}).get('chars', 0):,} chars)",
+                    "chief_orchestrator",
+                    {
+                        "artifact": "intent_packet.json",
+                        "version": intent_packet.get("version"),
+                        "sources": intent_packet.get("sources", []),
+                    },
+                )
+                plan_context = {
+                    "intent_packet": intent_packet,
+                    "project": self.profile.project,
+                    "repo_path": self.profile.project.get("repo") or str(self.settings.project_dir or ""),
+                    "repo_tool_policy": "read-only inspection is allowed; do not edit or run shell commands",
+                    "mode": state.get("mode"),
+                    "human_decision": state.get("human_decision", {}),
+                }
+            except Exception as exc:
+                await self._event(
+                    state,
+                    "intent.packet.failed",
+                    f"Intent packet could not be built: {exc}",
+                    "chief_orchestrator",
+                    {"error": str(exc)},
+                )
         result = await self._call(
             state,
             "compose_implementer",
-            "Translate the approved screen spec into a surgical Compose implementation plan with files, state, previews, tests, and verification commands.",
-            {
-                "change_request": state.get("change_request", {}),
-                "design_contract": state.get("design_contract", {}),
-                "screen_spec": state.get("screen_spec", {}),
-                "design_tokens": state.get("design_tokens", {}),
-                "synthesis": state.get("synthesis", {}),
-                "project": self.profile.project,
-                "mode": state.get("mode"),
-                "demo": state.get("demo", False),
-            },
+            "Translate the approved intent packet into a surgical Compose implementation plan with files, state, previews, tests, and verification commands. "
+            "The intent_packet is authoritative; preserve exact tokens, decisions, target fidelity, and must-fix constraints. Do not average or reinterpret it.",
+            plan_context,
         )
         data = dict(result.data)
         if state.get("demo"):
             data["simulated"] = True
+        if intent_packet:
+            data["intent_packet"] = {
+                "artifact": "intent_packet.json",
+                "version": intent_packet.get("version"),
+                "sources": intent_packet.get("sources", []),
+                "within_budget": (intent_packet.get("meta") or {}).get("within_budget"),
+            }
         if (
             not state.get("demo")
             and self.code_worker.enabled
@@ -1119,22 +1166,42 @@ class CompanyGraph:
                 doing="Applying the approved plan to an isolated worktree",
             )
             repo_path = self.profile.project.get("repo") or str(self.settings.project_dir or self.settings.root)
-            try:
-                code_result = await self.code_worker.apply(
-                    state["run_id"],
-                    str(repo_path),
-                    str(state.get("change_request", {}).get("problem") or state.get("prompt", "Implement the approved design")),
-                    {
-                        "prompt": state.get("prompt"),
-                        "change_request": state.get("change_request", {}),
-                        "design_contract": state.get("design_contract", {}),
-                        "screen_spec": state.get("screen_spec", {}),
-                        "implementation_plan": data,
-                        "project": self.profile.project,
-                    },
-                )
-            except Exception as exc:
-                code_result = {"status": "failed", "reason": str(exc)}
+            packet_conflicts = (intent_packet or {}).get("decisions", {}).get("conflicts_remaining") or []
+            human_decision = state.get("human_decision") or {}
+            if packet_conflicts and human_decision.get("decision") != "override":
+                code_result = {
+                    "status": "failed",
+                    "reason": "intent packet has unresolved design conflicts; resolve them before code edits",
+                    "conflicts_remaining": packet_conflicts,
+                }
+            else:
+                code_context = {
+                    "prompt": state.get("prompt"),
+                    "implementation_plan": data,
+                    "project": self.profile.project,
+                    "human_decision": human_decision,
+                    "mode": state.get("mode"),
+                }
+                if not intent_packet:
+                    # Fallback for a failed packet build: keep the legacy artifacts
+                    # rather than sending the worker an under-specified prompt.
+                    code_context.update(
+                        {
+                            "change_request": state.get("change_request", {}),
+                            "design_contract": state.get("design_contract", {}),
+                            "screen_spec": state.get("screen_spec", {}),
+                        }
+                    )
+                try:
+                    code_result = await self.code_worker.apply(
+                        state["run_id"],
+                        str(repo_path),
+                        str(state.get("change_request", {}).get("problem") or state.get("prompt", "Implement the approved design")),
+                        code_context,
+                        intent_packet=intent_packet,
+                    )
+                except Exception as exc:
+                    code_result = {"status": "failed", "reason": str(exc)}
             data["code_edits"] = code_result
             data["status"] = code_result.get("status", "unknown")
             await self._event(

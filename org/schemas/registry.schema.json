@@ -38,6 +38,8 @@
           "enabled": { "type": "boolean" },
           "prompt_key": { "type": "string" },
           "model": { "type": "string" },
+          "opencode_agent": { "type": "string" },
+          "opencode_timeout": { "type": "integer" },
           "real_world_equivalent": { "type": "string" },
           "mission": { "type": "string" },
           "inputs": { "type": "array", "items": { "type": "string" } },

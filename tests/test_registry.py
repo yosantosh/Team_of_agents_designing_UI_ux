@@ -6,7 +6,7 @@ from ui_ux_company.registry import Registry, list_projects, load_budget, load_pr
 
 def test_registry_loads_and_validates(settings):
     registry = load_registry(settings)
-    assert registry.version == "1.0.1"
+    assert registry.version == "1.0.2"
     assert len(registry.agents) >= 30
     assert "ceo" in registry.enabled_agent_ids()
     assert "chief_orchestrator" in registry.enabled_agent_ids()
@@ -15,6 +15,8 @@ def test_registry_loads_and_validates(settings):
     assert registry.agent("ceo")["codename"] == "A1"
     assert registry.agent("chief_orchestrator")["reports_to"] == "ceo"
     assert registry.agent("product_analyst")["reports_to"] == "discovery_lead"
+    assert registry.agent("engineering_lead")["opencode_agent"] == "uiux-reader"
+    assert registry.agent("compose_implementer")["opencode_agent"] == "uiux-reader"
     assert registry.model_alias("reasoner")["model"].startswith("modal/")
 
 
@@ -41,6 +43,21 @@ def test_prompt_update_apply_and_rollback(settings, tmp_path):
     rolled = registry.rollback("evo_test")
     assert rolled["proposal_id"] == "evo_test"
     assert "prompt_overrides" not in registry.data
+
+
+def test_reader_agent_is_selected_for_engineering_roles(settings):
+    from ui_ux_company.gateway import ModelGateway
+    from ui_ux_company.storage import Storage
+
+    registry = load_registry(settings)
+    storage = Storage(settings.storage_db)
+    try:
+        gateway = ModelGateway(settings, registry, storage)
+        assert gateway._agent_spec("engineering_lead")["opencode_agent"] == "uiux-reader"
+        assert gateway._agent_spec("compose_implementer")["opencode_agent"] == "uiux-reader"
+        assert gateway._agent_spec("visual_ui_designer").get("opencode_agent") is None
+    finally:
+        storage.close()
 
 
 def test_project_catalog(settings):

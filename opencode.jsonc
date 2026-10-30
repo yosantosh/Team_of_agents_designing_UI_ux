@@ -23,6 +23,37 @@
         "lsp": "deny",
         "external_directory": "deny"
       }
+    },
+    "uiux-reader": {
+      "description": "Read-only repository inspector for the UI/UX Agent Company. Reads the target repo; never edits, never runs shell, never uses the network.",
+      "mode": "primary",
+      "model": "modal/deepseek-v4.1-flash-1017",
+      "temperature": 0.1,
+      "prompt": "{file:./.opencode/prompts/repo-inspector.md}",
+      "permission": {
+        "edit": "deny",
+        "bash": "deny",
+        "read": {
+          "*": "allow",
+          "*.env": "deny",
+          "*.env.*": "deny",
+          "**/.git/**": "deny"
+        },
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "webfetch": "deny",
+        "websearch": "deny",
+        "task": "deny",
+        "todowrite": "deny",
+        "skill": "deny",
+        "question": "deny",
+        "lsp": "allow",
+        "external_directory": {
+          "*": "deny",
+          "/home/pluto/main_projects/**": "allow"
+        }
+      }
     }
   }
 }

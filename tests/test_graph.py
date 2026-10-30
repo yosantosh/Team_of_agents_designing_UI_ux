@@ -51,13 +51,17 @@ class _RecordingCodeWorker:
     def __init__(self):
         self.calls = []
 
-    async def apply(self, run_id, repo_path, goal, context):
+    async def apply(self, run_id, repo_path, goal, context, intent_packet=None):
         self.calls.append(
             {
                 "run_id": run_id,
                 "repo_path": str(repo_path),
                 "goal": goal,
-                "has_contract": bool(context.get("design_contract")),
+                "has_packet": bool(intent_packet),
+                "packet_ids": [
+                    item.get("id") for item in (intent_packet or {}).get("non_negotiables", [])
+                ][:3],
+                "has_plan": bool(context.get("implementation_plan")),
             }
         )
         return {
@@ -96,10 +100,12 @@ def test_build_run_hands_approved_design_to_code_worker(settings):
             )
         )
         assert len(worker.calls) >= 1
-        assert all(call["has_contract"] for call in worker.calls)
+        assert all(call["has_packet"] for call in worker.calls)
+        assert all(call["has_plan"] for call in worker.calls)
         assert result["implementation"]["code_edits"]["status"] == "edited"
         artifacts = {a["name"] for a in graph.storage.list_artifacts(result["run_id"])}
         assert "implementation_plan.json" in artifacts
+        assert "intent_packet.json" in artifacts
     finally:
         asyncio.run(graph.aclose())
         graph.storage.close()

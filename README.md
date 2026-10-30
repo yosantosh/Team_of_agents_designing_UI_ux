@@ -251,11 +251,23 @@ Code edits happen only in `build`, `ship`, and `fix` runs. `explore`, `design`, 
 
 Toggle **Allow build/ship/fix agents to edit project files** and choose the mode in Settings. The defaults can also be set with `UIUX_CODE_EDITS`, `UIUX_CODE_EDIT_MODE`, `UIUX_CODE_WORKER_AGENT`, `UIUX_CODE_WORKER_MODEL`, and `UIUX_CODE_WORKER_TIMEOUT`.
 
+### Residual intent packet
+
+Before A19 writes the implementation plan, the company builds `intent_packet.json` from selected high-signal sources: Dictator/CEO intent, product acceptance criteria, Target_ui truth and annotations, UX flows/platform constraints, exact tokens, authoritative design decisions, critic must-fix items, human decisions, and tier reviews. This is a **residual connection**, not a full transcript: it carries the exact intent that would otherwise fade across handoffs.
+
+A19 and CodeWorker receive the packet directly. CodeWorker also receives the implementation plan separately, so neither is cut off by the old 60k-character slice. The worker writes `code_edit_result.json` with an `intent_coverage` list when it can, and `intent_coverage.json` when coverage is returned. Packet budgets are configurable with `UIUX_INTENT_PACKET_MAX_CHARS`, `UIUX_CODE_WORKER_PACKET_CHARS`, `UIUX_CODE_WORKER_PLAN_CHARS`, and `UIUX_CODE_WORKER_OTHER_CHARS`.
+
+### Read-only repo inspection
+
+A5 Engineering Lead and A19 Compose Implementer use the project-local `uiux-reader` OpenCode agent. It has **read/glob/grep/list/lsp** access to `/home/pluto/main_projects/**`, but **no edit, write, bash, or network tools**. It can inspect the actual Android repo while producing the plan/review. The actual code edit still goes through the isolated `build` worker.
+
+The reader denies `.env`, `.git`, and paths outside the allowed project roots. If a future project lives outside `/home/pluto/main_projects`, add its root to the `external_directory` allow-list in `opencode.jsonc`.
+
 ---
 
 ## Current limitations (honest)
 
-**Implemented in this build:** left rail, full-page flow, CEO/5 leads/codenames, real tier-lead review gates, company feed and signal lines, approval provenance/SLA/overdue, decision history, modes, model test, run stop, recursive folder search, current-UI baseline + visual diff, project validation, mock-data cleanup, QA re-check, design-contract editor, evolution rollback + metric canary, searchable model picker, flow zoom, target annotations, multi-project active switcher, token RBAC + audit log, webhook/browser notifications, Postgres checkpoint support, S3/MinIO artifact mirroring, and real build/ship/fix code workers with worktree isolation and reviewable diffs.
+**Implemented in this build:** left rail, full-page flow, CEO/5 leads/codenames, real tier-lead review gates, company feed and signal lines, approval provenance/SLA/overdue, decision history, modes, model test, run stop, recursive folder search, current-UI baseline + visual diff, project validation, mock-data cleanup, QA re-check, design-contract editor, evolution rollback + metric canary, searchable model picker, flow zoom, target annotations, multi-project active switcher, token RBAC + audit log, webhook/browser notifications, Postgres checkpoint support, S3/MinIO artifact mirroring, real build/ship/fix code workers with worktree isolation and reviewable diffs, the residual intent packet, and read-only repo inspection for engineering roles.
 
 **Still limited / queued:**
 - App metadata still uses SQLite unless migrated; Postgres currently backs LangGraph checkpoints.
@@ -272,6 +284,9 @@ Other limitations:
 
 - **Local MVP:** SQLite + in-process event bus.
 - **Code worker:** real OpenCode `build` edits in an isolated worktree by default; merge/promotion remains human-owned. Direct mode edits the checkout and is explicitly unsafe.
+- **Intent coverage** is model-reported. If the build agent does not return a `intent_coverage` JSON block, the artifact is absent; the code diff and A5/QA gates still apply.
+- **A5 review timing:** A5 reviews the design/implementation contract before A19 writes the file-level plan. The intent packet includes A5's tier review, but a separate post-plan gate is still queued.
+- **Reader scope:** `uiux-reader` currently allows repo roots under `/home/pluto/main_projects/**`; a project elsewhere needs an `external_directory` entry.
 - **Visual QA** has the adapter contract and upload path; the full emulator/ADB automation is the next production step.
 - **Functional/a11y QA** accepts test evidence; it does not yet drive UIAutomator/Espresso itself.
 - **Evolution shadow eval** is heuristic; production needs LangSmith experiments and golden tasks.

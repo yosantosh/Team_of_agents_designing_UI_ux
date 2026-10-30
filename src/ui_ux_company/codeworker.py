@@ -115,6 +115,7 @@ class CodeWorker:
         repo_path: str | Path,
         goal: str,
         context: dict[str, Any],
+        intent_packet: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not self.enabled:
             return {"status": "disabled", "reason": "UIUX_CODE_EDITS is off"}
@@ -145,16 +146,42 @@ class CodeWorker:
                 return {"status": "failed", "reason": f"git worktree failed: {err[:1000]}"}
 
         model = getattr(self.settings, "code_worker_model", "") or getattr(self.settings, "model_override", "") or self.settings.opencode_model
+        packet_chars = int(getattr(self.settings, "code_worker_packet_chars", 160000))
+        plan_chars = int(getattr(self.settings, "code_worker_plan_chars", 40000))
+        other_chars = int(getattr(self.settings, "code_worker_other_chars", 30000))
+        if intent_packet:
+            packet_text = json.dumps(intent_packet, ensure_ascii=False, separators=(",", ":"), default=str)
+            plan = context.get("implementation_plan") or {}
+            plan_text = json.dumps(plan, ensure_ascii=False, separators=(",", ":"), default=str)
+            other = {key: value for key, value in context.items() if key != "implementation_plan"}
+            other_text = json.dumps(other, ensure_ascii=False, separators=(",", ":"), default=str)
+            approved_context = (
+                "APPROVED INTENT PACKET (authoritative; preserve exact tokens, decisions, and visual truth):\n"
+                + packet_text[:packet_chars]
+                + ("\n… [intent packet truncated]" if len(packet_text) > packet_chars else "")
+                + "\n\nIMPLEMENTATION PLAN:\n"
+                + plan_text[:plan_chars]
+                + ("\n… [implementation plan truncated]" if len(plan_text) > plan_chars else "")
+                + "\n\nRUN CONTEXT:\n"
+                + other_text[:other_chars]
+            )
+        else:
+            approved_context = (
+                "APPROVED CONTEXT:\n"
+                + json.dumps(context, ensure_ascii=False, indent=2, default=str)[:60000]
+            )
         prompt = (
             "You are the Android implementation worker for the UI/UX Agent Company. "
             "Edit the project files directly to implement the approved design. "
             "Respect the repository AGENTS.md, design tokens, shared-file ownership, and the approved plan. "
             "Do not touch secrets or production infrastructure. Keep the change surgical. "
             "Run the narrowest useful verification command if the repository supports it. "
-            "When finished, briefly summarize files changed and verification evidence.\n\n"
+            "When finished, briefly summarize files changed and verification evidence. "
+            "Then output exactly one final JSON object with `intent_coverage`: "
+            "a list of {id, status, evidence} for every NN-* and C-* item you implemented, "
+            "marked implemented, not_applicable, or conflict. Do not invent IDs.\n\n"
             f"RUN: {run_id}\nGOAL: {goal}\n\n"
-            "APPROVED CONTEXT:\n"
-            + json.dumps(context, ensure_ascii=False, indent=2, default=str)[:60000]
+            + approved_context
         )
         cmd = [
             self.settings.opencode_bin,
@@ -194,6 +221,7 @@ class CodeWorker:
                     tools.append({"tool": part.get("tool"), "state": (part.get("state") or {}).get("status")})
             if event.get("type") == "error":
                 errors.append(str(event.get("error")))
+        intent_coverage = self._extract_intent_coverage(texts)
         # Capture the diff. Worktree mode commits so the patch is durable and reviewable.
         _status_code, status_out, _ = await self._run(["git", "status", "--porcelain"], worktree, 60)
         changed_files = [line[3:] for line in status_out.splitlines() if line.strip()]
@@ -233,6 +261,8 @@ class CodeWorker:
         self.artifacts.write_text(run_id, "code_worker_transcript.txt", stdout + "\n" + stderr, created_by="code_worker")
         if diff:
             self.artifacts.write_text(run_id, "code_diff.patch", diff, "text/x-patch", created_by="code_worker")
+        if intent_coverage:
+            self.artifacts.write_json(run_id, "intent_coverage.json", {"items": intent_coverage}, created_by="code_worker")
         result = {
             "status": "edited" if changed_files else ("failed" if code != 0 else "no_changes"),
             "mode": mode,
@@ -244,9 +274,35 @@ class CodeWorker:
             "exit_code": code,
             "summary": "\n".join(texts)[-4000:],
             "diff_artifact": "code_diff.patch" if diff else None,
+            "intent_packet": {
+                "version": intent_packet.get("version"),
+                "chars": len(json.dumps(intent_packet, ensure_ascii=False, separators=(",", ":"), default=str)),
+                "sources": intent_packet.get("sources", []),
+                "within_budget": (intent_packet.get("meta") or {}).get("within_budget"),
+            } if intent_packet else None,
+            "intent_coverage": intent_coverage,
         }
         self.artifacts.write_json(run_id, "code_edit_result.json", result, created_by="code_worker")
         return result
+
+    @staticmethod
+    def _extract_intent_coverage(texts: list[str]) -> list[dict[str, Any]]:
+        text = "\n".join(texts)
+        marker = '"intent_coverage"'
+        marker_index = text.rfind(marker)
+        if marker_index < 0:
+            return []
+        start = text.rfind("{", 0, marker_index)
+        if start < 0:
+            return []
+        try:
+            value, _end = json.JSONDecoder().raw_decode(text[start:])
+        except json.JSONDecodeError:
+            return []
+        items = value.get("intent_coverage") if isinstance(value, dict) else None
+        if not isinstance(items, list):
+            return []
+        return [item for item in items if isinstance(item, dict)]
 
     def _git_branch(self, repo: Path) -> str:
         import subprocess

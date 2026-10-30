@@ -186,11 +186,14 @@ class ModelGateway:
         last_error: Exception | None = None
         for attempt in range(1, attempts + 1):
             started = time.monotonic()
+            agent_spec = self._agent_spec(role)
+            agent_name = str(agent_spec.get("opencode_agent") or self.settings.opencode_agent)
+            agent_timeout = int(agent_spec.get("opencode_timeout") or self.settings.opencode_timeout)
             cmd = [
                 self.settings.opencode_bin,
                 "run",
                 "--agent",
-                self.settings.opencode_agent,
+                agent_name,
                 "--format",
                 "json",
                 "--model",
@@ -211,13 +214,13 @@ class ModelGateway:
                 )
                 try:
                     stdout_b, stderr_b = await asyncio.wait_for(
-                        proc.communicate(), timeout=self.settings.opencode_timeout
+                        proc.communicate(), timeout=agent_timeout
                     )
                 except asyncio.TimeoutError:
                     proc.kill()
                     await proc.wait()
                     raise ModelProviderError(
-                        f"OpenCode worker timed out after {self.settings.opencode_timeout}s"
+                        f"OpenCode worker timed out after {agent_timeout}s"
                     )
                 except asyncio.CancelledError:
                     proc.kill()

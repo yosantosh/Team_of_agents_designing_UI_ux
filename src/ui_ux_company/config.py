@@ -72,7 +72,7 @@ class Settings:
     model_override: str | None = None
     opencode_timeout: int = 300
     opencode_cwd: Path = PROJECT_ROOT
-    max_context_chars: int = 120000
+    max_context_chars: int = 180000
     project_dir: Path | None = None
     project_id: str = "dhunchat"
 
@@ -99,6 +99,10 @@ class Settings:
     code_worker_agent: str = "build"
     code_worker_model: str = ""
     code_worker_timeout: int = 900
+    intent_packet_max_chars: int = 160000
+    code_worker_packet_chars: int = 160000
+    code_worker_plan_chars: int = 40000
+    code_worker_other_chars: int = 30000
     s3_bucket: str = ""
     s3_endpoint: str = ""
     s3_access_key: str = ""
@@ -134,7 +138,7 @@ class Settings:
             model_override=os.getenv("UIUX_MODEL_OVERRIDE") or None,
             opencode_timeout=_int("UIUX_OPENCODE_TIMEOUT", 300),
             opencode_cwd=_path("UIUX_OPENCODE_CWD", root, root),
-            max_context_chars=_int("UIUX_MAX_CONTEXT_CHARS", 120000),
+            max_context_chars=_int("UIUX_MAX_CONTEXT_CHARS", 180000),
             autonomy_level=os.getenv("UIUX_AUTONOMY_LEVEL", "L2"),
             auto_approve=_bool("UIUX_AUTO_APPROVE", True),
             max_rework=_int("UIUX_MAX_REWORK", 2),
@@ -156,6 +160,10 @@ class Settings:
             code_worker_agent=os.getenv("UIUX_CODE_WORKER_AGENT", "build"),
             code_worker_model=os.getenv("UIUX_CODE_WORKER_MODEL", ""),
             code_worker_timeout=_int("UIUX_CODE_WORKER_TIMEOUT", 900),
+            intent_packet_max_chars=_int("UIUX_INTENT_PACKET_MAX_CHARS", 160000),
+            code_worker_packet_chars=_int("UIUX_CODE_WORKER_PACKET_CHARS", 160000),
+            code_worker_plan_chars=_int("UIUX_CODE_WORKER_PLAN_CHARS", 40000),
+            code_worker_other_chars=_int("UIUX_CODE_WORKER_OTHER_CHARS", 30000),
             s3_bucket=os.getenv("UIUX_S3_BUCKET", ""),
             s3_endpoint=os.getenv("UIUX_S3_ENDPOINT", ""),
             s3_access_key=os.getenv("UIUX_S3_ACCESS_KEY", ""),
