@@ -15,3 +15,5 @@ node_modules/
 dist/
 build/
 *.egg-info/
+
+infra/langfuse/LOGIN.local.txt
