@@ -113,6 +113,16 @@ CREATE TABLE IF NOT EXISTS token_usage (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_token_usage_run ON token_usage(run_id);
+CREATE TABLE IF NOT EXISTS eval_experiments (
+  experiment_id TEXT PRIMARY KEY,
+  lane TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'running',
+  tasks_json TEXT,
+  results_json TEXT,
+  metrics_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS evolution_proposals (
   proposal_id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
@@ -500,6 +510,72 @@ class Storage:
                 counts[table] = int(cur.rowcount or 0)
             self._conn.commit()
         return {"run_id": run_id, "deleted": counts, "artifact_paths": artifact_paths}
+
+    # --------------------------------------------------------- eval runs
+    def create_eval_experiment(self, experiment_id: str, lane: str, tasks: list[Any]) -> dict[str, Any]:
+        now = utcnow()
+        self._execute(
+            "INSERT INTO eval_experiments(experiment_id,lane,status,tasks_json,results_json,metrics_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+            (experiment_id, lane, "running", json.dumps(tasks, default=str), "[]", "{}", now, now),
+        )
+        return self.get_eval_experiment(experiment_id) or {}
+
+    def update_eval_experiment(
+        self,
+        experiment_id: str,
+        *,
+        status: str | None = None,
+        results: list[Any] | None = None,
+        metrics: dict[str, Any] | None = None,
+    ) -> None:
+        fields = ["updated_at=?"]
+        params: list[Any] = [utcnow()]
+        if status:
+            fields.append("status=?")
+            params.append(status)
+        if results is not None:
+            fields.append("results_json=?")
+            params.append(json.dumps(results, default=str))
+        if metrics is not None:
+            fields.append("metrics_json=?")
+            params.append(json.dumps(metrics, default=str))
+        params.append(experiment_id)
+        self._execute(f"UPDATE eval_experiments SET {', '.join(fields)} WHERE experiment_id=?", tuple(params))
+
+    def get_eval_experiment(self, experiment_id: str) -> dict[str, Any] | None:
+        rows = self._query("SELECT * FROM eval_experiments WHERE experiment_id=?", (experiment_id,))
+        if not rows:
+            return None
+        row = rows[0]
+        for key, source in (("tasks", "tasks_json"), ("results", "results_json"), ("metrics", "metrics_json")):
+            try:
+                row[key] = json.loads(row.get(source) or ("[]" if key != "metrics" else "{}"))
+            except json.JSONDecodeError:
+                row[key] = [] if key != "metrics" else {}
+            row.pop(source, None)
+        return row
+
+    def list_eval_experiments(self, limit: int = 50) -> list[dict[str, Any]]:
+        rows = self._query("SELECT * FROM eval_experiments ORDER BY created_at DESC LIMIT ?", (limit,))
+        result = []
+        for row in rows:
+            try:
+                row["tasks"] = json.loads(row.get("tasks_json") or "[]")
+            except json.JSONDecodeError:
+                row["tasks"] = []
+            try:
+                row["results"] = json.loads(row.get("results_json") or "[]")
+            except json.JSONDecodeError:
+                row["results"] = []
+            try:
+                row["metrics"] = json.loads(row.get("metrics_json") or "{}")
+            except json.JSONDecodeError:
+                row["metrics"] = {}
+            row.pop("tasks_json", None)
+            row.pop("results_json", None)
+            row.pop("metrics_json", None)
+            result.append(row)
+        return result
 
     # ------------------------------------------------------- agent outputs
     def add_agent_output(

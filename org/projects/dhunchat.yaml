@@ -8,6 +8,12 @@ project:
   app_name: "dhunchat"
   archetype: "hybrid_proximity_social"   # instagram_visual | x_realtime_text | hybrid_proximity_social
   description: "A social music app with feed, profiles, messaging, rooms, player, and proximity discovery."
+  app_plan_path: "docs/dhunchat_android_liquid_glass_ui_ux_plan.md"
+  app_plan_candidates:
+    - "docs/dhunchat_android_liquid_glass_ui_ux_plan.md"
+    - "docs/ui_ux_refinment_plan.md"
+    - "docs/overall_app_plan.md"
+    - "App_plan.md"
   min_sdk: 24
   compile_sdk: 36
   target_sdk: 36

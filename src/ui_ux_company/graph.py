@@ -18,6 +18,7 @@ from .config import Settings
 from .events import EventBus
 from .gateway import ModelGateway
 from .intent import build_intent_packet, select_target_images
+from .app_plan import plan_context as app_plan_context
 from .models import new_id, utcnow
 from .prompts import work_label
 from .registry import BudgetPolicy, ProjectProfile, Registry, load_budget, load_profile, load_registry
@@ -1167,12 +1168,16 @@ class CompanyGraph:
             "mode": state.get("mode"),
             "demo": state.get("demo", False),
         }
-        if state.get("mode") in {"build", "ship", "fix"}:
+        if (
+            state.get("mode") in {"build", "ship", "fix"}
+            and state.get("intent_packet_enabled", self.settings.intent_packet_enabled)
+        ):
             try:
                 intent_packet = build_intent_packet(
                     state,
                     max_chars=int(getattr(self.settings, "intent_packet_max_chars", 160000)),
                     repo_path=self.profile.project.get("repo") or self.settings.project_dir,
+                    documents=[app_plan_context(self.settings, self.profile)],
                 )
                 await self._write(state, "intent_packet.json", intent_packet, "chief_orchestrator")
                 await self._event(
@@ -1793,6 +1798,7 @@ class CompanyGraph:
         model: str | None = None,
         autonomy_level: str | None = None,
         run_id: str | None = None,
+        intent_packet_enabled: bool | None = None,
     ) -> dict[str, Any]:
         await self._ensure_graph()
         run_id = run_id or new_id("run")
@@ -1812,6 +1818,7 @@ class CompanyGraph:
             "autonomy_level": autonomy_level or self.settings.autonomy_level,
             "target_ui_enabled": self.settings.target_ui_enabled if target_ui_enabled is None else target_ui_enabled,
             "target_ui_path": str(self.settings.target_ui_path),
+            "intent_packet_enabled": self.settings.intent_packet_enabled if intent_packet_enabled is None else intent_packet_enabled,
             "rework_counts": {"design": 0, "implementation": 0},
             "errors": [],
             "status": "intake",

@@ -52,6 +52,15 @@ def test_api_health_and_registry(settings):
         validation = client.get("/api/project/validate")
         assert validation.status_code == 200
         assert "valid" in validation.json()
+        app_plan = client.get("/api/app-plan")
+        assert app_plan.status_code == 200
+        assert "content" in app_plan.json()
+        eval_tasks = client.get("/api/evals/tasks")
+        assert eval_tasks.status_code == 200
+        assert len(eval_tasks.json()["tasks"]) >= 3
+        eval_experiments = client.get("/api/evals/experiments")
+        assert eval_experiments.status_code == 200
+        assert "experiments" in eval_experiments.json()
         root = client.get("/")
         assert root.status_code == 200
         flow = client.get("/flow")

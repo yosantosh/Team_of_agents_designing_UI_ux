@@ -11,13 +11,14 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
 from .agents import AgentRunner
+from .app_plan import plan_context
 from .artifacts import ArtifactStore
 from .config import Settings
 from .events import EventBus
 from .gateway import ModelGateway
 from .models import EvolutionProposal, new_id, utcnow
 from .prompts import work_label
-from .registry import Registry, load_registry, save_yaml
+from .registry import Registry, load_profile, load_registry, save_yaml
 from .storage import Storage
 
 
@@ -50,6 +51,7 @@ class EvolutionEngine:
     ):
         self.settings = settings or Settings.from_env()
         self.registry = registry or load_registry(self.settings)
+        self.profile = load_profile(self.settings)
         self.storage = storage or Storage(self.settings.storage_db)
         self.bus = bus or EventBus(self.storage)
         self.artifacts = artifacts or ArtifactStore(self.settings, self.storage)
@@ -136,6 +138,8 @@ class EvolutionEngine:
                 {"run_id": r["run_id"], "status": r["status"], "prompt": r["prompt"][:160], "created_at": r["created_at"]}
                 for r in runs[:10]
             ],
+            "app_plan": plan_context(self.settings, self.profile),
+            "eval_experiments": self.storage.list_eval_experiments(10),
         }
         await self._event(state["proposal_id"], "evolution.observed", "Metrics collected", "org_evolution_auditor", metrics)
         return {"metrics": metrics, "status": "diagnose"}
@@ -176,6 +180,9 @@ class EvolutionEngine:
                 "immutable": self.registry.data.get("evolution_policy", {}).get("immutable", []),
                 "mutable": self.registry.data.get("evolution_policy", {}).get("mutable", []),
                 "rejected_proposals": rejected,
+                "app_plan": (state.get("metrics", {}) or {}).get("app_plan", {}),
+                "eval_experiments": (state.get("metrics", {}) or {}).get("eval_experiments", []),
+                "instruction": "Treat the app plan as the product north star. Use golden-task experiment results as the primary evidence for whether a change works. Do not propose an unmeasured improvement when a relevant experiment exists.",
                 "company_context": {
                     "note": "Shared company context. Use it only for awareness; do not repeat it.",
                     "recent_runs": (state.get("metrics", {}) or {}).get("recent_runs", []),

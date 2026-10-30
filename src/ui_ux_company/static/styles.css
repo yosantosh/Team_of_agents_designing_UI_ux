@@ -336,7 +336,13 @@ body.flow-full .flow-card { height: calc(100vh - 92px); display: flex; flex-dire
 body.flow-full .flow-canvas { flex: 1; height: auto; min-height: 0; }
 body.flow-full .flow-toolbar { margin-bottom: 8px; }
 
-/* Evolution */
+/* App plan / evaluation */
+.app-plan-card textarea { min-height: 240px; font-family: var(--mono); font-size: 10.5px; line-height: 1.55; }
+.app-plan-card input { margin-top: 8px; }
+.eval-card .checks input { margin-top: 3px; }
+.eval-card .item .title { font-size: 10.5px; }
+
+/* Improvement */
 .evolution-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .evolution-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin: var(--gap) 0; }
 .evolution-card { border: 1px solid var(--border); border-radius: 14px; padding: 11px; background: rgba(255,255,255,.02); cursor: pointer; }

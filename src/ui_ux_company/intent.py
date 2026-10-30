@@ -114,6 +114,7 @@ def build_intent_packet(
     *,
     max_chars: int = DEFAULT_MAX_CHARS,
     repo_path: str | Path | None = None,
+    documents: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build a compact, authoritative residual context packet for implementation.
 
@@ -267,6 +268,7 @@ def build_intent_packet(
         "deferred": deferred,
         "reviews": review_packet,
         "human_decisions": state.get("human_decision") or {},
+        "authoritative_docs": documents or [],
         "sources": [
             {"artifact": name, "sha256": _hash(value)}
             for name, value in (

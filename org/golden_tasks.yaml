@@ -1,0 +1,55 @@
+# Golden tasks for LangSmith / local evaluation.
+# Keep prompts stable. Change the task ID when the acceptance criteria change.
+tasks:
+  - id: homefeed_target_fidelity
+    title: "HomeFeed exact Target_ui fidelity"
+    prompt: >-
+      Redesign the Home/feed screen for Orphic. Match the supplied Target_ui reference as exactly as possible:
+      hierarchy, composition, spacing, top app bar, story rail, tab bar, feed item, primary Create action,
+      and bottom navigation. Keep the OLED black canvas. Specify every loading, empty, offline, error, long-text,
+      and 200% font state. Do not copy brand assets.
+    mode: design
+    target_ui: true
+    auto_approve: true
+    criteria:
+      - "Target_ui references are used directly, not only as text descriptions"
+      - "Single primary Create action"
+      - "All non-happy states are specified"
+      - "No critical contrast or 200% font issue"
+  - id: homefeed_build_target
+    title: "HomeFeed build against Target_ui"
+    prompt: >-
+      Implement the approved Home/feed design from the available project plan and Target_ui references.
+      Edit the existing FeedScreen/FeedViewModel instead of creating a parallel screen. Keep the app compiling.
+    mode: build
+    target_ui: true
+    auto_approve: true
+    criteria:
+      - "Existing FeedScreen.kt modified"
+      - "No duplicate HomeFeed screen package"
+      - "Compile command succeeds"
+      - "Intent coverage returned"
+  - id: profile_edit_plan
+    title: "Profile edit flow"
+    prompt: >-
+      Design the profile edit flow using the available app plan and Target_ui references. Match the reference
+      layout and states, preserve OLED black, and include save, discard, loading, error, and permission states.
+    mode: design
+    target_ui: true
+    auto_approve: true
+    criteria:
+      - "Profile edit layout follows target"
+      - "Unsaved-change protection specified"
+      - "Image/media permissions and errors covered"
+  - id: feed_empty_offline
+    title: "Feed empty and offline states"
+    prompt: >-
+      Design the Home feed empty and offline states using the app plan and target references.
+      Keep the primary Create action visible, provide one clear recovery path, and cover cached and uncached offline states.
+    mode: design
+    target_ui: true
+    auto_approve: true
+    criteria:
+      - "Empty state has one recovery path"
+      - "Cached offline keeps content interactive"
+      - "Uncached offline explains and retries"

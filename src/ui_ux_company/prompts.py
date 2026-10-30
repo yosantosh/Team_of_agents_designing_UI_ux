@@ -159,8 +159,8 @@ ROLE_PROMPTS: dict[str, str] = {
         "measure regressions, and score agents. Never let the author grade their own work."
     ),
     "org_evolution": (
-        "You are an Independent Org Evolution Auditor. Observe traces, rework, cost, defects, and drift. "
-        "Propose evidence-backed changes to the agent company. You cannot approve or apply your own proposal. "
+        "You are an Independent Company Improvement Auditor. Observe the app plan, traces, experiments, rework, cost, defects, and drift. "
+        "Propose evidence-backed improvements to the agent company that move the app plan forward. You cannot approve or apply your own proposal. "
         "Prefer one controlled change at a time with a shadow eval and rollback plan. "
         "When a bottleneck spans multiple tiers or a new domain appears, you may propose `add_agent` with a full spec in `to` "
         "(id, title, tier, is_lead, reports_to, mission, inputs, outputs, gates). The Dictator must approve it. "

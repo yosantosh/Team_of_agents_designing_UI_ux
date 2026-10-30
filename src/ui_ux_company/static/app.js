@@ -13,6 +13,10 @@ const state = {
   audit: [],
   history: [],
   historyFilter: "all",
+  appPlan: null,
+  evalTasks: [],
+  evalLanes: {},
+  evalExperiments: [],
   contextMode: "none",
   authUser: null,
   runId: null,
@@ -124,6 +128,14 @@ function agentLabel(agentId) {
   return agent ? `${agent.codename || ""} · ${agent.title || agent.id}` : agentId;
 }
 
+function gateLabel(gate) {
+  const value = String(gate || "");
+  if (value === "evolution_approval") return "company improvement";
+  if (value === "dictator_escalation") return "Dictator escalation";
+  if (value === "human_design_approval") return "design approval";
+  return value.replaceAll("_", " ");
+}
+
 function currentWork(agentId) {
   if (!state.run) return "";
   const messages = (state.messages || []).filter(
@@ -162,6 +174,8 @@ function switchTab(name) {
   }
   if (name === "target") renderTarget();
   if (name === "evolution") {
+    if (!state.appPlan) loadAppPlan();
+    if (!state.evalTasks.length) loadEval();
     if (!state.evolutionId) state.evolutionId = defaultEvolutionId();
     if (state.evolutionId) loadEvolution(state.evolutionId, true);
     else renderEvolution();
@@ -758,7 +772,7 @@ async function loadHistoryEvolution(proposalId) {
   state.evolutionId = proposalId;
   await loadEvolution(proposalId, false);
   switchTab("evolution");
-  toast("Historical evolution audit loaded.");
+  toast("Historical improvement audit loaded.");
 }
 
 function deriveAgentStatus() {
@@ -1255,7 +1269,7 @@ function approvalCard(approval, compact = false) {
     <div class="approval-card">
       <div class="title">${escapeHtml(approval.title)}</div>
       <div class="meta">
-        <span class="badge ${statusClass(approval.status)}">${escapeHtml(approval.gate)}</span>
+        <span class="badge ${statusClass(approval.status)}">${escapeHtml(gateLabel(approval.gate))}</span>
         <span>${fmtTime(approval.created_at)}</span>
         ${approval.run_id ? `<span>${escapeHtml(short(approval.run_id, 28))}</span>` : ""}
       </div>
@@ -1271,7 +1285,7 @@ function approvalCard(approval, compact = false) {
       </details>
       ${options && !compact ? `<div class="meta" style="margin-top:7px">${options}</div>` : ""}
       <div class="approval-actions">
-        ${approval.gate === "evolution_approval" && approval.run_id ? `<button class="btn small ghost" data-evolution-view="${escapeHtml(approval.run_id)}">View proposal</button>` : ""}
+        ${approval.gate === "evolution_approval" && approval.run_id ? `<button class="btn small ghost" data-evolution-view="${escapeHtml(approval.run_id)}">View improvement</button>` : ""}
         <button class="btn small primary" data-approval="${escapeHtml(approval.approval_id)}" data-decision="approve">Approve</button>
         <button class="btn small danger" data-approval="${escapeHtml(approval.approval_id)}" data-decision="reject">Reject</button>
         <button class="btn small ghost" data-approval="${escapeHtml(approval.approval_id)}" data-decision="dictate">Dictate</button>
@@ -1320,7 +1334,7 @@ function renderApprovals() {
       <div class="title">${escapeHtml(a.title)}</div>
       <div class="meta">
         <span class="badge ${statusClass(a.status)}">${escapeHtml(a.status)}</span>
-        <span>${escapeHtml(a.gate)}</span>
+        <span>${escapeHtml(gateLabel(a.gate))}</span>
         <span>From: ${escapeHtml(a.from_codename || agentLabel(a.from_agent))}</span>
         <span>${fmtTime(a.decided_at || a.created_at)}</span>
         ${a.decision?.notes ? `<span>${escapeHtml(short(a.decision.notes, 80))}</span>` : ""}
@@ -1751,6 +1765,151 @@ async function recritiqueContract() {
   }
 }
 
+// ------------------------------------------------------- app plan & evaluation
+async function loadAppPlan(path = "") {
+  try {
+    const query = path ? `?path=${encodeURIComponent(path)}` : "";
+    const data = await api(`/api/app-plan${query}`);
+    state.appPlan = data;
+    $("app-plan-path").value = data.relative_path || data.path || "";
+    $("app-plan-content").value = data.content || "";
+    $("app-plan-meta").textContent = data.exists
+      ? `${data.size || 0} chars · ${data.headings?.length || 0} headings · sha ${short(data.sha256, 12)} · ${data.path}`
+      : `Not found: ${data.path} — choose a path or create the plan.`;
+    renderAppPlanFiles(data.candidates || []);
+  } catch (error) {
+    toast(`App plan load error: ${error.message}`, "error");
+  }
+}
+
+function renderAppPlanFiles(files) {
+  const list = $("app-plan-files");
+  if (!list) return;
+  const items = (files || []).filter((item) => item.exists !== false);
+  list.innerHTML = items.length ? items.map((item) => `
+    <div class="item clickable" data-app-plan-path="${escapeHtml(item.path)}">
+      <div class="title">${escapeHtml(item.name || item.relative || item.path)}</div>
+      <div class="meta">${escapeHtml(item.relative || item.path)}</div>
+    </div>
+  `).join("") : `<div class="muted">No plan file found yet. Enter a path and Save to create one.</div>`;
+  list.querySelectorAll("[data-app-plan-path]").forEach((el) => {
+    el.addEventListener("click", () => loadAppPlan(el.dataset.appPlanPath));
+  });
+}
+
+async function findAppPlans() {
+  try {
+    const data = await api(`/api/app-plan/search?q=plan`);
+    renderAppPlanFiles(data.files || []);
+    toast(`${(data.files || []).length} plan file(s) found.`);
+  } catch (error) {
+    toast(`Plan search error: ${error.message}`, "error");
+  }
+}
+
+async function saveAppPlan() {
+  try {
+    const data = await api("/api/app-plan", {
+      method: "PUT",
+      body: JSON.stringify({
+        path: $("app-plan-path").value.trim() || null,
+        content: $("app-plan-content").value,
+      }),
+    });
+    state.appPlan = data;
+    toast(`App plan saved: ${data.relative_path || data.path}`);
+    await loadAppPlan(data.path);
+  } catch (error) {
+    toast(`App plan save error: ${error.message}`, "error");
+  }
+}
+
+async function loadEval() {
+  try {
+    const [tasks, experiments] = await Promise.all([
+      api("/api/evals/tasks"),
+      api("/api/evals/experiments"),
+    ]);
+    state.evalTasks = tasks.tasks || [];
+    state.evalLanes = tasks.lanes || {};
+    state.evalExperiments = experiments.experiments || [];
+    const select = $("eval-lane");
+    if (select) {
+      select.innerHTML = Object.entries(state.evalLanes).map(([id, label]) => `<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`).join("");
+    }
+    renderEvalTasks();
+    renderEvalExperiments();
+  } catch (error) {
+    toast(`Evaluation load error: ${error.message}`, "error");
+  }
+}
+
+function renderEvalTasks() {
+  const list = $("eval-tasks");
+  if (!list) return;
+  list.innerHTML = state.evalTasks.length ? state.evalTasks.map((task) => `
+    <label class="checks" style="margin:0;display:flex;gap:7px;align-items:flex-start;padding:7px;border:1px solid var(--border);border-radius:9px">
+      <input type="checkbox" data-eval-task="${escapeHtml(task.id)}" checked />
+      <span><b>${escapeHtml(task.title || task.id)}</b><br><span class="muted">${escapeHtml(short(task.prompt, 190))}</span></span>
+    </label>
+  `).join("") : `<div class="muted">No golden tasks found. Add org/golden_tasks.yaml.</div>`;
+}
+
+function renderEvalExperiments() {
+  const list = $("eval-experiments");
+  if (!list) return;
+  list.innerHTML = state.evalExperiments.length ? state.evalExperiments.map((experiment) => {
+    const metrics = experiment.metrics || {};
+    const running = experiment.status === "running";
+    return `<div class="item">
+      <div class="title">${escapeHtml(experiment.lane)} · ${escapeHtml(experiment.status)}</div>
+      <div class="meta">
+        <span>${escapeHtml(experiment.experiment_id)}</span>
+        <span>${escapeHtml(fmtTime(experiment.created_at))}</span>
+        ${metrics.pass_rate != null ? `<span>pass ${Math.round(Number(metrics.pass_rate) * 100)}%</span>` : ""}
+        ${metrics.avg_critic_score != null ? `<span>score ${Number(metrics.avg_critic_score).toFixed(2)}</span>` : ""}
+        ${metrics.total_tokens ? `<span>${fmtNumber(metrics.total_tokens)} tokens</span>` : ""}
+        ${running ? `<span class="badge running">running</span>` : ""}
+      </div>
+      ${metrics.error ? `<div class="doing">${escapeHtml(short(metrics.error, 200))}</div>` : ""}
+      ${metrics.langsmith?.enabled ? `<div class="doing">LangSmith: ${escapeHtml(metrics.langsmith.dataset || "logged")}</div>` : ""}
+    </div>`;
+  }).join("") : `<div class="muted">No evaluation experiments yet. Run one above.</div>`;
+}
+
+async function runEval() {
+  const button = $("eval-run");
+  const taskIds = Array.from(document.querySelectorAll("[data-eval-task]:checked")).map((el) => el.dataset.evalTask);
+  if (!taskIds.length) { toast("Select at least one golden task.", "error"); return; }
+  button.disabled = true;
+  $("eval-status").textContent = "running";
+  $("eval-status").className = "status running";
+  try {
+    const result = await api("/api/evals/run", {
+      method: "POST",
+      body: JSON.stringify({ lane: $("eval-lane").value, task_ids: taskIds }),
+    });
+    toast(`Evaluation started: ${result.experiment_id}`);
+    const pollEval = async () => {
+      await loadEval();
+      const experiment = state.evalExperiments.find((item) => item.experiment_id === result.experiment_id);
+      if (experiment && experiment.status === "running") {
+        setTimeout(pollEval, 4000);
+      } else {
+        button.disabled = false;
+        $("eval-status").textContent = experiment?.status || "idle";
+        $("eval-status").className = `status ${statusClass(experiment?.status || "idle")}`;
+      }
+    };
+    setTimeout(pollEval, 2500);
+  } catch (error) {
+    button.disabled = false;
+    $("eval-status").textContent = "failed";
+    $("eval-status").className = "status failed";
+    toast(`Evaluation start error: ${error.message}`, "error");
+  }
+}
+
 // ------------------------------------------------------------------ evolution
 function fillEvolutionSelect(selected) {
   const select = $("evolution-select");
@@ -1775,10 +1934,10 @@ function fillEvolutionSelect(selected) {
 }
 
 function evolutionTitle(item) {
-  if (item && item.status === "stopped" && ["Evolution audit running", "Evolution audit starting"].includes(item.title)) {
-    return "Evolution stopped before proposal";
+  if (item && item.status === "stopped" && ["Evolution audit running", "Improvement audit starting"].includes(item.title)) {
+    return "Improvement stopped before proposal";
   }
-  return item?.title || "Evolution";
+  return item?.title || "Improvement";
 }
 
 function defaultEvolutionId() {
@@ -1791,7 +1950,7 @@ function renderEvolutions() {
   const proposals = state.evolutions || [];
   fillEvolutionSelect(state.evolutionId);
   if (!proposals.length) {
-    list.innerHTML = `<div class="muted">No proposals yet. Start an audit from the Evolution tab.</div>`;
+    list.innerHTML = `<div class="muted">No proposals yet. Start an audit from the Improvement tab.</div>`;
     return;
   }
   list.innerHTML = proposals.slice(0, 8).map((item) => `
@@ -1830,10 +1989,10 @@ async function startEvolution() {
     switchTab("evolution");
     await loadEvolution(response.proposal_id, true);
     if (autoApprove) state.contextMode = "history";
-    toast(autoApprove ? "Evolution audit started; safe changes will auto-apply." : "Evolution audit started; it will pause for your approval.");
+    toast(autoApprove ? "Improvement audit started; safe improvements will auto-apply." : "Improvement audit started; it will pause for your approval.");
     await poll();
   } catch (error) {
-    toast(`Evolution start error: ${error.message}`, "error");
+    toast(`Improvement start error: ${error.message}`, "error");
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -1851,12 +2010,12 @@ async function loadEvolution(proposalId, connect = false) {
   } catch (error) {
     if (String(error.message).includes("404")) {
       state.evolutionId = proposalId;
-      state.evolution = { proposal: { proposal_id: proposalId, title: "Evolution audit starting", status: "evaluating" }, state: { values: {} }, events: [] };
+      state.evolution = { proposal: { proposal_id: proposalId, title: "Improvement audit starting", status: "evaluating" }, state: { values: {} }, events: [] };
       state.evolutionEvents = [];
       renderEvolution();
       return;
     }
-    toast(`Evolution load error: ${error.message}`, "error");
+    toast(`Improvement load error: ${error.message}`, "error");
   }
 }
 
@@ -1875,7 +2034,7 @@ function connectEvolutionEvents(proposalId, afterId = 0) {
       }
     } catch { /* ignore */ }
   };
-  source.onerror = () => { $("footer-status").textContent = "evolution event stream reconnecting…"; };
+  source.onerror = () => { $("footer-status").textContent = "improvement event stream reconnecting…"; };
 }
 
 function renderEvolution() {
@@ -1899,14 +2058,14 @@ function renderEvolution() {
     {
       id: "observe",
       label: "Observe",
-      name: "Org Observer",
+      name: "Company Observer",
       status: has("evolution.observed") ? "completed" : (stopped ? "stopped" : (has("evolution.started") ? "running" : "idle")),
       output: "Reads traces, rework, cost, gate failures, and budget pressure.",
     },
     {
       id: "diagnose",
       label: "Diagnose",
-      name: "Org Evolution Auditor",
+      name: "Company Improvement Auditor",
       status: has("evolution.proposed") ? "completed" : (stopped ? "stopped" : (has("agent.started") ? "running" : "idle")),
       output: `${auditorModel ? `${auditorModel} · ` : ""}${proposal.title || (stopped ? "Stopped before a proposal was produced." : "Waiting for the independent auditor.")}`,
     },
@@ -1933,8 +2092,8 @@ function renderEvolution() {
     },
     {
       id: "canary",
-      label: "Canary",
-      name: "Scope canary",
+      label: "Pilot rollout",
+      name: "Pilot run",
       status: record.proposal?.canary?.verdict === "pass" || status === "promoted"
         ? "completed"
         : (record.proposal?.canary?.verdict === "fail" ? "failed" : (["applied", "approved"].includes(status) ? "running" : "idle")),
@@ -1955,7 +2114,7 @@ function renderEvolution() {
   });
   const proposalEl = $("evolution-proposal");
   if (!state.evolutionId) {
-    proposalEl.innerHTML = `<div class="muted">No evolution proposal selected. Start an audit or pick one from the Overview.</div>`;
+    proposalEl.innerHTML = `<div class="muted">No improvement proposal selected. Start an audit or pick one from the Overview.</div>`;
   } else {
     proposalEl.innerHTML = `
       <div class="card-head"><h2>${escapeHtml(evolutionTitle({ title: proposal.title, status }))}</h2><span class="badge ${statusClass(status)}">${escapeHtml(status)}</span></div>
@@ -1981,9 +2140,9 @@ function renderEvolution() {
           <button class="btn danger small" id="evolution-reject">Reject</button>
           <button class="btn ghost small" id="evolution-dictate">Dictate</button>
         ` : ""}
-        ${["applied", "approved"].includes(status) ? `<button class="btn primary small" id="evolution-canary">Start canary</button><button class="btn danger small" id="evolution-rollback">Rollback registry</button>` : ""}
-        ${["promoted", "canary"].includes(status) ? `<button class="btn ghost small" id="evolution-promote">Promote</button><button class="btn danger small" id="evolution-rollback">Rollback registry</button>` : ""}
-        ${status === "canary_failed" ? `<button class="btn danger small" id="evolution-rollback">Rollback registry</button>` : ""}
+        ${["applied", "approved"].includes(status) ? `<button class="btn primary small" id="evolution-canary">Start pilot</button><button class="btn danger small" id="evolution-rollback">Undo registry change</button>` : ""}
+        ${["promoted", "canary"].includes(status) ? `<button class="btn ghost small" id="evolution-promote">Adopt improvement</button><button class="btn danger small" id="evolution-rollback">Undo registry change</button>` : ""}
+        ${status === "canary_failed" ? `<button class="btn danger small" id="evolution-rollback">Undo registry change</button>` : ""}
         <button class="btn ghost small" id="evolution-stop-inline" ${terminal ? "disabled" : ""}>Stop</button>
       </div>
     `;
@@ -2004,7 +2163,7 @@ function renderEvolution() {
         <div class="meta">${escapeHtml(event.agent_id || "system")} · ${escapeHtml(event.type)} · ${fmtTime(event.created_at)}</div>
       </div>
     </div>
-  `).join("") : `<div class="muted">Evolution events will stream here.</div>`;
+  `).join("") : `<div class="muted">Improvement events will stream here.</div>`;
   eventList.scrollTop = eventList.scrollHeight;
 }
 
@@ -2027,7 +2186,7 @@ function openEvolutionOutput(stageId, stageData) {
     <h3 style="font-size:12px;margin-top:12px">Proposal</h3>
     <pre>${escapeHtml(JSON.stringify(state.evolution?.proposal?.proposal || {}, null, 2))}</pre>
   `;
-  openModal(stage?.name || "Evolution stage", stage?.label || "", body);
+  openModal(stage?.name || "Improvement stage", stage?.label || "", body);
 }
 
 async function runCanary() {
@@ -2049,7 +2208,7 @@ async function promoteEvolution() {
   if (!state.evolutionId) return;
   try {
     await api(`/api/evolve/${encodeURIComponent(state.evolutionId)}/promote`, { method: "POST" });
-    toast("Evolution promoted.");
+    toast("Improvement adopted.");
     await loadEvolution(state.evolutionId, false);
     await poll();
   } catch (error) {
@@ -2073,7 +2232,7 @@ async function stopEvolution() {
   if (!state.evolutionId) return;
   try {
     await api(`/api/evolve/${encodeURIComponent(state.evolutionId)}/stop`, { method: "POST" });
-    toast("Evolution stopped.");
+    toast("Improvement audit stopped.");
     await loadEvolution(state.evolutionId, false);
     await poll();
   } catch (error) {
@@ -2088,11 +2247,11 @@ async function decideEvolution(decision, notes = "") {
       method: "POST",
       body: JSON.stringify({ decision, notes: notes || `Dictator decision: ${decision}` }),
     });
-    toast(`Evolution decision: ${decision}`);
+    toast(`Improvement decision: ${decision}`);
     await loadEvolution(state.evolutionId, false);
     await poll();
   } catch (error) {
-    toast(`Evolution decision error: ${error.message}`, "error");
+    toast(`Improvement decision error: ${error.message}`, "error");
   }
 }
 
@@ -2486,6 +2645,11 @@ $("evolve-btn").addEventListener("click", () => {
     startEvolution();
   }
 });
+$("app-plan-find").addEventListener("click", findAppPlans);
+$("app-plan-load").addEventListener("click", () => loadAppPlan($("app-plan-path").value.trim()));
+$("app-plan-save").addEventListener("click", saveAppPlan);
+$("eval-run").addEventListener("click", runEval);
+$("eval-refresh").addEventListener("click", loadEval);
 $("evolution-start").addEventListener("click", startEvolution);
 $("evolution-stop").addEventListener("click", stopEvolution);
 $("evolution-select").addEventListener("change", (event) => { if (event.target.value) openEvolution(event.target.value); });

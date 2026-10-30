@@ -20,7 +20,7 @@
       <select id="model-select" class="model-select" title="OpenCode model for new runs"></select>
       <button class="btn ghost small" id="model-picker" title="Search all models">⌕</button>
       <button class="btn ghost small" id="test-model" title="Ask the selected model who it is">Test</button>
-      <button class="btn primary" id="evolve-btn">✦ Evolve / Improve</button>
+      <button class="btn primary" id="evolve-btn">✦ Improve Company</button>
     </div>
   </header>
 
@@ -32,7 +32,7 @@
     <button class="tab" data-tab="contract" title="Design contract"><span class="rail-icon">▦</span><span class="rail-label">Contract</span></button>
     <button class="tab" data-tab="history" title="Global history"><span class="rail-icon">⟲</span><span class="rail-label">History</span></button>
     <button class="tab" data-tab="target" title="Target_ui"><span class="rail-icon">◉</span><span class="rail-label">Target_ui</span></button>
-    <button class="tab" data-tab="evolution" title="Evolution"><span class="rail-icon">✦</span><span class="rail-label">Evolution</span></button>
+    <button class="tab" data-tab="evolution" title="Company Improvement"><span class="rail-icon">✦</span><span class="rail-label">Improvement</span></button>
     <button class="tab" data-tab="settings" title="Settings"><span class="rail-icon">⚙</span><span class="rail-label">Settings</span></button>
   </aside>
 
@@ -125,9 +125,9 @@
           </div>
 
           <div class="card">
-            <div class="card-head"><h2>Evolution lab</h2><span class="tag">proposal → eval → you</span></div>
+            <div class="card-head"><h2>Company Improvement</h2><span class="tag">observe → measure → you</span></div>
             <div id="evolutions-quick" class="list scroll"></div>
-            <button class="btn ghost small wide" id="open-evolution">Open evolution lab ↗</button>
+            <button class="btn ghost small wide" id="open-evolution">Open Improvement Lab ↗</button>
           </div>
 
           <div class="card small-card">
@@ -137,7 +137,7 @@
               <li>Roborazzi removed. Visual QA uses emulator/ADB capture.</li>
               <li>Every artifact is versioned, hashed, and linked to a run.</li>
               <li>LangSmith is the flight recorder; this is the control room.</li>
-              <li>No agent may approve its own evolution.</li>
+              <li>No agent may approve its own improvement.</li>
             </ul>
           </div>
         </div>
@@ -282,10 +282,10 @@
           <div class="subtabs" id="history-filters">
             <button class="subtab active" data-history-filter="all">All</button>
             <button class="subtab" data-history-filter="company">Company runs</button>
-            <button class="subtab" data-history-filter="evolution">Evolution</button>
+            <button class="subtab" data-history-filter="evolution">Improvements</button>
           </div>
         </div>
-        <p class="hint">Every company run and evolution audit is saved here. Tap an entry to restore its flow, timeline, artifacts, contract, approvals, and outputs.</p>
+        <p class="hint">Every company run and improvement audit is saved here. Tap an entry to restore its flow, timeline, artifacts, contract, approvals, and outputs.</p>
         <div id="history-list" class="list scroll tall"></div>
       </div>
     </section>
@@ -316,26 +316,55 @@
 
     <!-- EVOLUTION -->
     <section id="tab-evolution" class="tab-panel">
+      <div class="card app-plan-card">
+        <div class="card-head">
+          <h2>App plan</h2>
+          <div class="row">
+            <button class="btn ghost small" id="app-plan-find">Find plan files</button>
+            <button class="btn ghost small" id="app-plan-load">Load</button>
+            <button class="btn primary small" id="app-plan-save">Save plan</button>
+          </div>
+        </div>
+        <input id="app-plan-path" class="wide-select" placeholder="docs/dhunchat_android_liquid_glass_ui_ux_plan.md" />
+        <div id="app-plan-files" class="list scroll" style="max-height:140px;margin-top:8px"></div>
+        <textarea id="app-plan-content" rows="12" placeholder="The overall app plan. The improvement auditor reads this during every audit."></textarea>
+        <p class="hint" id="app-plan-meta">The company improvement auditor treats this plan as the product north star. Missing features and plan gaps become improvement candidates.</p>
+      </div>
+      <div class="card eval-card">
+        <div class="card-head">
+          <h2>Evaluation lab</h2>
+          <span class="tag">LangSmith / local</span>
+        </div>
+        <p class="muted">Compare direct build, company pipeline, and company + intent packet on frozen golden tasks. Experiments are stored locally and exported to LangSmith when configured.</p>
+        <div class="row" style="margin:9px 0">
+          <select id="eval-lane" class="wide-select" style="max-width:360px"></select>
+          <button class="btn primary small" id="eval-run">Run experiment</button>
+          <button class="btn ghost small" id="eval-refresh">Refresh</button>
+          <span class="status" id="eval-status">idle</span>
+        </div>
+        <div id="eval-tasks" class="list scroll" style="max-height:170px"></div>
+        <div id="eval-experiments" class="list scroll" style="max-height:250px;margin-top:10px"></div>
+      </div>
       <div class="card evolution-toolbar">
         <div>
-          <h2>Evolution / Improve</h2>
-          <p class="muted">The independent auditor observes traces, rework, cost, and gates, then proposes one controlled change. It cannot approve itself.</p>
+          <h2>Company Improvement</h2>
+          <p class="muted">The independent improvement auditor observes the app plan, traces, experiments, rework, cost, and gates, then proposes one controlled change. It cannot approve itself.</p>
         </div>
         <div class="row">
           <select id="evolution-select" class="wide-select" style="max-width:340px"></select>
-          <label class="checks" style="margin:0;font-size:10px"><input type="checkbox" id="evolution-auto" /> Auto-apply safe changes</label>
+          <label class="checks" style="margin:0;font-size:10px"><input type="checkbox" id="evolution-auto" /> Auto-apply safe improvements</label>
           <span class="status" id="evolution-status">idle</span>
-          <button class="btn primary small" id="evolution-start">✦ Start audit</button>
+          <button class="btn primary small" id="evolution-start">✦ Start improvement audit</button>
           <button class="btn danger small" id="evolution-stop" disabled>■ Stop</button>
         </div>
       </div>
       <div id="evolution-cards" class="evolution-cards"></div>
       <div class="evolution-layout">
         <div class="card" id="evolution-proposal">
-          <div class="muted">No evolution proposal selected. Start an audit or pick one from the Overview.</div>
+          <div class="muted">No improvement proposal selected. Start an audit or pick one from the Overview.</div>
         </div>
         <div class="card">
-          <div class="card-head"><h2>Evolution events</h2><span class="tag" id="evolution-event-count">0</span></div>
+          <div class="card-head"><h2>Improvement events</h2><span class="tag" id="evolution-event-count">0</span></div>
           <div id="evolution-events" class="timeline scroll tall"></div>
         </div>
       </div>
@@ -424,7 +453,7 @@
   </main>
 
   <footer class="footer">
-    <span>LangGraph control plane · OpenCode gateway · Target_ui manifest · Evolution graph</span>
+    <span>LangGraph control plane · OpenCode gateway · Target_ui manifest · Improvement graph</span>
     <span id="footer-status">—</span>
   </footer>
 

@@ -17,11 +17,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .agents import AgentRunner
+from .app_plan import read_app_plan, search_app_plans, write_app_plan
 from .artifacts import ArtifactStore
 from .auth import AuthService
 from .config import Settings, save_runtime_settings
 from .events import EventBus
 from .evolution import EvolutionEngine
+from .evals import LANES, EvalHarness, load_golden_tasks
 from .gateway import ModelGateway
 from .graph import CompanyGraph
 from .models import ApprovalDecision, EvolutionRequest, RunRequest, new_id
@@ -76,6 +78,18 @@ class RunRollbackRequest(BaseModel):
     confirm: bool = True
 
 
+class AppPlanUpdate(BaseModel):
+    path: str | None = None
+    content: str
+
+
+class EvalRequest(BaseModel):
+    lane: str = "company_with_packet"
+    task_ids: list[str] = []
+    model: str | None = None
+    backend: str | None = None
+
+
 class DesignContractUpdate(BaseModel):
     contract: dict[str, Any]
 
@@ -123,6 +137,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         gateway=gateway,
         agents=agents,
     )
+    eval_harness = EvalHarness(settings, storage, company, profile)
     evolution = EvolutionEngine(
         settings,
         registry=registry,
@@ -161,6 +176,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.bus = bus
     app.state.artifacts = artifacts
     app.state.rollback = rollback_service
+    app.state.eval_harness = eval_harness
+    app.state.eval_tasks: dict[str, asyncio.Task] = {}
     app.state.company = company
     app.state.evolution = evolution
     app.state.tasks = set()
@@ -289,6 +306,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "registry": registry.data,
             "mermaid": registry.to_mermaid(),
         }
+
+    @app.get("/api/app-plan")
+    async def get_app_plan(path: str | None = None):
+        return read_app_plan(settings, profile, path)
+
+    @app.put("/api/app-plan")
+    async def update_app_plan(request: AppPlanUpdate):
+        try:
+            return write_app_plan(settings, profile, request.content, request.path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/app-plan/search")
+    async def find_app_plans(q: str = "plan"):
+        return {"files": search_app_plans(settings, profile, q)}
 
     @app.get("/api/project")
     async def get_project():
@@ -680,6 +712,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 model=request.model or settings.model_override,
                 autonomy_level=request.autonomy_level,
                 run_id=run_id,
+                intent_packet_enabled=request.intent_packet_enabled,
             )
         )
         app.state.run_tasks[run_id] = task
@@ -820,6 +853,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/runs")
     async def list_runs(limit: int = 50):
         return {"runs": storage.list_runs(limit)}
+
+    @app.get("/api/evals/tasks")
+    async def eval_tasks():
+        return {"tasks": load_golden_tasks(settings), "lanes": LANES}
+
+    @app.get("/api/evals/experiments")
+    async def eval_experiments(limit: int = 50):
+        return {"experiments": storage.list_eval_experiments(limit)}
+
+    @app.get("/api/evals/experiments/{experiment_id}")
+    async def eval_experiment(experiment_id: str):
+        experiment = storage.get_eval_experiment(experiment_id)
+        if not experiment:
+            raise HTTPException(status_code=404, detail="evaluation experiment not found")
+        return {"experiment": experiment}
+
+    @app.post("/api/evals/run")
+    async def run_eval(request: EvalRequest):
+        if request.lane not in LANES:
+            raise HTTPException(status_code=400, detail=f"unknown lane: {request.lane}")
+        experiment_id = new_id("eval")
+        task = _spawn(
+            eval_harness.run(
+                request.lane,
+                request.task_ids,
+                model=request.model or settings.model_override,
+                backend=request.backend,
+                experiment_id=experiment_id,
+            )
+        )
+        app.state.eval_tasks[experiment_id] = task
+        return {"experiment_id": experiment_id, "status": "running", "lane": request.lane}
 
     @app.get("/api/history")
     async def get_history(limit: int = 100):

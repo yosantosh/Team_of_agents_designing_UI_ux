@@ -1,4 +1,4 @@
-version: "1.0.3"
+version: "1.0.4"
 organization: "Native Android UI/UX Agentic Company"
 owner: "Dictator (Human Product Owner / Manager)"
 description: >
@@ -228,7 +228,7 @@ agents:
     failure_modes: [rubber_stamping, missing_evidence, flagship_only]
 
   - id: meta_lead
-    title: "Meta, Memory & Evolution Lead"
+    title: "Learning & Improvement Lead"
     codename: "A7"
     tier: 5
     enabled: true
@@ -673,7 +673,7 @@ agents:
     failure_modes: [self_grading, benchmark_overfit, stale_evals]
 
   - id: org_evolution_auditor
-    title: "Org Evolution Auditor"
+    title: "Company Improvement Auditor"
     tier: 5
     enabled: true
     prompt_key: org_evolution
@@ -898,6 +898,13 @@ evolution_history:
     change_type: "prompt_update"
     target: "design_lead"
     summary: "Applied the decision-packet escalation prompt; routing and gate-threshold changes were recorded but require code changes."
+  - proposal_id: "manual_20261030_improvement_lab"
+    applied_at: "2026-10-30T12:00:00+00:00"
+    from_version: "1.0.3"
+    to_version: "1.0.4"
+    change_type: "manual_config"
+    target: "improvement_lab"
+    summary: "Renamed Evolution to Company Improvement, added image capability to the coder alias, and bound the app plan plus golden-task evaluation to the improvement auditor."
 
 metrics:
   - id: first_pass_yield

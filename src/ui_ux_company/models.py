@@ -141,6 +141,7 @@ class RunRequest(FlexModel):
     backend: Literal["opencode", "mock"] | None = None
     model: str | None = None
     autonomy_level: str | None = None
+    intent_packet_enabled: bool | None = None
 
 
 class ApprovalDecision(FlexModel):
