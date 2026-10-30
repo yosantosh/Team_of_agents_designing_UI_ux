@@ -123,10 +123,16 @@ Hierarchy: **CEO A1 → Chief A2 → five tier leads A3–A7 → specialists A8+
 You asked to reuse the models already configured in OpenCode. The gateway shells out to:
 
 ```bash
-opencode run --agent uiux-worker --format json --model <model> [--file image] "<prompt>"
+opencode run --agent <agent> --format json --model <model> [--file image] "<prompt>"
 ```
 
-`opencode.jsonc` defines `uiux-worker` with **all tools denied** (no edits, no shell, no reads, no web). It is a pure text/vision worker. The app never copies provider keys; OpenCode owns provider configuration.
+`opencode.jsonc` defines three project-local agents:
+
+- `uiux-worker` — **all tools denied**; pure text/vision model gateway for design, research, critique, and most lead agents.
+- `uiux-reader` — **read-only repo tools** (`read`, `glob`, `grep`, `list`, `lsp`) for A5 Engineering Lead, A19 Compose Implementer, and A25 Design Engineer. No edit, write, bash, network, secrets, or `.git` access.
+- `build` — the real OpenCode coding loop used only by CodeWorker, with edit/shell/verification tools in an isolated worktree.
+
+A1–A36 design/review agents therefore use OpenCode’s model/routing/event infrastructure, not its full coding loop. The coder path does use the real OpenCode agent loop. The app never copies provider keys; OpenCode owns provider configuration.
 
 Model aliases live in `org/architecture_registry.yaml`:
 
