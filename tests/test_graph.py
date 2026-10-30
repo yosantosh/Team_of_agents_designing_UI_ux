@@ -32,6 +32,7 @@ def test_mock_design_run_completes(settings):
         assert "RELEASE_NOTES.md" in names
         assert "code_edit_result.json" not in names, "design mode must not edit project files"
         assert graph.storage.list_agent_messages(result["run_id"]), "company feed should record handoffs"
+        assert graph.storage.list_agent_outputs(result["run_id"]), "agent outputs should be saved"
         approvals = graph.storage.list_approvals(None, 100)
         design_approvals = [a for a in approvals if a["run_id"] == result["run_id"] and a["gate"] == "human_design_approval"]
         assert design_approvals
@@ -164,6 +165,40 @@ def test_escalation_has_easy_summary_and_expandable_details(settings):
         assert approval["summary"].startswith("The design critic found blockers")
         assert "Accent text contrast" in approval["details"]
         assert approval["message"] == approval["summary"]
+    finally:
+        asyncio.run(graph.aclose())
+        graph.storage.close()
+
+def test_failed_run_can_resume_from_checkpoint(settings):
+    graph = CompanyGraph(settings)
+    original_synthesis = graph._synthesis
+    calls = {"count": 0}
+
+    async def flaky_synthesis(state):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("temporary synthesis failure")
+        return await original_synthesis(state)
+
+    graph._synthesis = flaky_synthesis
+    try:
+        result = asyncio.run(
+            graph.run(
+                "Resume the profile screen implementation",
+                mode="build",
+                demo=True,
+                auto_approve=True,
+                backend="mock",
+            )
+        )
+        assert result["status"] == "failed"
+        run_id = result["run_id"]
+        snapshot = asyncio.run(graph.get_state(run_id))
+        assert "synthesis" in snapshot["next"]
+        resumed = asyncio.run(graph.resume_run(run_id))
+        assert resumed["status"] == "completed"
+        assert calls["count"] >= 2
+        assert graph.storage.list_agent_outputs(run_id)
     finally:
         asyncio.run(graph.aclose())
         graph.storage.close()

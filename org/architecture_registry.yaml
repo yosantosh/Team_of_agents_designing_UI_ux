@@ -1,4 +1,4 @@
-version: "1.0.2"
+version: "1.0.3"
 organization: "Native Android UI/UX Agentic Company"
 owner: "Dictator (Human Product Owner / Manager)"
 description: >
@@ -18,6 +18,9 @@ defaults:
   max_context_chars: 18000
   require_evidence_for_release: true
   allow_unverified_release: false
+
+prompt_overrides:
+  design_lead: "Escalation must emit a decision packet: exactly one question, 2–3 mutually exclusive options with a recommended default, the specific blocking clause reference(s), tokens spent on the run so far, and what changes downstream if each option is chosen. No packet, no escalation."
 
 playbooks:
   explore:
@@ -888,6 +891,13 @@ evolution_history:
     change_type: "manual_config"
     target: "tier_3_engineering_roles"
     summary: "Bound A5/A19/A25 to the read-only uiux-reader OpenCode agent for repo inspection; actual edits remain with the isolated build worker."
+  - proposal_id: "evo_20261030_010517_01cec768"
+    applied_at: "2026-10-30T01:06:13.994711+00:00"
+    from_version: "1.0.2"
+    to_version: "1.0.3"
+    change_type: "prompt_update"
+    target: "design_lead"
+    summary: "Applied the decision-packet escalation prompt; routing and gate-threshold changes were recorded but require code changes."
 
 metrics:
   - id: first_pass_yield

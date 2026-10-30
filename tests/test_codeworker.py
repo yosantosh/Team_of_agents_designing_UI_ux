@@ -148,7 +148,7 @@ def test_worker_injects_intent_packet_and_parses_coverage(settings, tmp_path, mo
         "import json, sys\n"
         "from pathlib import Path\n"
         "Path('probe.txt').write_text('EDITED', encoding='utf-8')\n"
-        "Path('prompt-seen.txt').write_text(sys.argv[-1], encoding='utf-8')\n"
+        "Path('prompt-seen.txt').write_text(sys.stdin.read(), encoding='utf-8')\n"
         "payload = {'intent_coverage': [{'id': 'NN-1', 'status': 'implemented', 'evidence': 'probe.txt'}]}\n"
         "print(json.dumps({'type': 'text', 'part': {'text': 'done\\n' + json.dumps(payload)}}))\n",
         encoding="utf-8",
@@ -191,12 +191,12 @@ def test_worker_does_not_truncate_packet_or_implementation_plan(settings, tmp_pa
         "import sys\n"
         "from pathlib import Path\n"
         "Path('probe.txt').write_text('EDITED', encoding='utf-8')\n"
-        "Path('prompt-seen.txt').write_text(sys.argv[-1], encoding='utf-8')\n",
+        "Path('prompt-seen.txt').write_text(sys.stdin.read(), encoding='utf-8')\n",
         encoding="utf-8",
     )
     script.chmod(0o755)
     worker, storage = _worker(settings, monkeypatch, script)
-    packet = {"version": "1.0", "blob": "A" * 70000, "meta": {"within_budget": True}}
+    packet = {"version": "1.0", "blob": "A" * 150000, "meta": {"within_budget": True}}
     plan = {"blob": "B" * 20000}
     try:
         result = asyncio.run(

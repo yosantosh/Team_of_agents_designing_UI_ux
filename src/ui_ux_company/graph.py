@@ -286,6 +286,31 @@ class CompanyGraph:
             return text
         return text[:limit].rsplit(" ", 1)[0] + "…"
 
+    def _record_agent_output(
+        self,
+        state: CompanyState,
+        role: str,
+        result: Any,
+        goal: str,
+        *,
+        task_id: str | None = None,
+    ) -> None:
+        try:
+            self.storage.add_agent_output(
+                state["run_id"],
+                role,
+                task_id=task_id or role,
+                stage=state.get("status"),
+                model=getattr(result, "model", None),
+                goal=goal,
+                output=getattr(result, "data", None),
+                text=getattr(result, "text", "") or "",
+                usage=getattr(result, "usage", {}) or {},
+            )
+        except Exception:
+            # Output capture is an audit aid; it must never break a run.
+            pass
+
     def _agent_brief(self, agent_id: str | None) -> str:
         if not agent_id:
             return "System"
@@ -399,26 +424,42 @@ class CompanyGraph:
         )
         started = time.monotonic()
         shared_context = self._company_context(state)
-        try:
-            result = await self.agents.run(
-                role,
-                goal,
-                {**context, "company_context": shared_context},
-                images=images,
-                run_id=state["run_id"],
-                task_id=role,
-                backend=state.get("backend"),
-                model=state.get("model"),
-            )
-        except Exception as exc:
+        result = None
+        last_error: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                result = await self.agents.run(
+                    role,
+                    goal,
+                    {**context, "company_context": shared_context},
+                    images=images,
+                    run_id=state["run_id"],
+                    task_id=role,
+                    backend=state.get("backend"),
+                    model=state.get("model"),
+                )
+                break
+            except Exception as exc:
+                last_error = exc
+                if attempt < 3:
+                    await self._event(
+                        state,
+                        "agent.retry",
+                        f"{role} attempt {attempt} failed; retrying",
+                        role,
+                        {"error": str(exc), "attempt": attempt},
+                    )
+                    await asyncio.sleep(1.5 * attempt)
+        if result is None:
             await self._event(
                 state,
                 "agent.failed",
-                f"{role} failed: {exc}",
+                f"{role} failed after retries: {last_error}",
                 role,
-                {"error": str(exc)},
+                {"error": str(last_error)},
             )
-            raise
+            raise last_error or RuntimeError(f"{role} failed")
+        self._record_agent_output(state, role, result, goal)
         await self._event(
             state,
             "agent.completed",
@@ -578,6 +619,13 @@ class CompanyGraph:
                 max_images=int(self.profile.target_ui.get("max_images_per_run", 8)),
                 backend=state.get("backend"),
                 model=state.get("model"),
+                on_result=lambda role, result, image: self._record_agent_output(
+                    state,
+                    role,
+                    result,
+                    f"Analyze Target_ui image {image.image_id}",
+                    task_id=f"target_ui:{image.image_id}",
+                ),
             )
             save_manifest(self.settings, self.profile, manifest)
         data = manifest.model_dump()
@@ -665,6 +713,7 @@ class CompanyGraph:
             model=state.get("model"),
         )
         for (role, _goal, _context, _images), result in zip(jobs, results):
+            self._record_agent_output(state, role, result, _goal)
             await self._event(
                 state,
                 "agent.completed",
@@ -1886,6 +1935,66 @@ class CompanyGraph:
         except Exception as exc:
             error = {"message": str(exc), "type": type(exc).__name__, "at": utcnow()}
             self.storage.update_run(run_id, status="failed", state={"status": "failed", "error": error})
+            await self.bus.publish(run_id, "run.failed", str(exc), "chief_orchestrator", error)
+            return {"status": "failed", "error": error}
+
+    async def resume_run(self, run_id: str, decision: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Resume a failed or stopped run from its last durable checkpoint."""
+        await self._ensure_graph()
+        run = self.storage.get_run(run_id)
+        if not run:
+            raise ValueError("run not found")
+        if run.get("status") not in {"failed", "stopped"}:
+            raise ValueError(f"run is not resumable from status {run.get('status')}")
+        snapshot = await self.graph.aget_state(self._config(run_id))
+        next_nodes = list(snapshot.next or [])
+        interrupts = list(getattr(snapshot, "interrupts", None) or [])
+        if not next_nodes and not interrupts:
+            raise ValueError("run has no resumable checkpoint")
+        if interrupts and decision is None:
+            raise ValueError("run is waiting for a decision; use the approval path")
+        from_stage = ", ".join(next_nodes) or "approval"
+        resumed_state = dict(snapshot.values or {})
+        resumed_state.update({"status": "running", "resumed_from": from_stage})
+        self.storage.update_run(run_id, status="running", state=resumed_state)
+        self.artifacts.write_json(
+            run_id,
+            "resume.json",
+            {"run_id": run_id, "from_stage": from_stage, "next": next_nodes, "resumed_at": utcnow()},
+            created_by="chief_orchestrator",
+        )
+        await self.bus.publish(
+            run_id,
+            "run.resumed",
+            f"Resuming from {from_stage}",
+            "chief_orchestrator",
+            {"from_stage": from_stage, "next": next_nodes},
+        )
+        try:
+            result = await self.graph.ainvoke(
+                Command(resume=decision) if interrupts and decision is not None else None,
+                self._config(run_id),
+            )
+            clean = self._sanitize(dict(result))
+            interrupted = bool(clean.get("__interrupt__"))
+            status = "awaiting_approval" if interrupted else str(clean.get("status", "completed"))
+            self.storage.update_run(run_id, status=status, state=clean)
+            await self.bus.publish(
+                run_id,
+                "run.paused" if interrupted else "run.completed",
+                f"Run {status}",
+                "chief_orchestrator",
+                {"status": status, "resumed": True},
+            )
+            return clean
+        except Exception as exc:
+            error = {"message": str(exc), "type": type(exc).__name__, "at": utcnow()}
+            self.artifacts.write_json(run_id, "error.json", error, created_by="chief_orchestrator")
+            self.storage.update_run(
+                run_id,
+                status="failed",
+                state={**resumed_state, "status": "failed", "error": error},
+            )
             await self.bus.publish(run_id, "run.failed", str(exc), "chief_orchestrator", error)
             return {"status": "failed", "error": error}
 

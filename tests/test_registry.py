@@ -6,7 +6,7 @@ from ui_ux_company.registry import Registry, list_projects, load_budget, load_pr
 
 def test_registry_loads_and_validates(settings):
     registry = load_registry(settings)
-    assert registry.version == "1.0.2"
+    assert registry.version == "1.0.3"
     assert len(registry.agents) >= 30
     assert "ceo" in registry.enabled_agent_ids()
     assert "chief_orchestrator" in registry.enabled_agent_ids()
@@ -42,7 +42,7 @@ def test_prompt_update_apply_and_rollback(settings, tmp_path):
     assert registry.data["prompt_overrides"]["independent_design_critic"] == "v2 bounded critic"
     rolled = registry.rollback("evo_test")
     assert rolled["proposal_id"] == "evo_test"
-    assert "prompt_overrides" not in registry.data
+    assert "independent_design_critic" not in (registry.data.get("prompt_overrides") or {})
 
 
 def test_reader_agent_is_selected_for_engineering_roles(settings):

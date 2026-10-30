@@ -85,6 +85,20 @@ CREATE TABLE IF NOT EXISTS agent_messages (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_agent_messages_run ON agent_messages(run_id, id);
+CREATE TABLE IF NOT EXISTS agent_outputs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL,
+  agent_id TEXT,
+  task_id TEXT,
+  stage TEXT,
+  model TEXT,
+  goal TEXT,
+  output_json TEXT NOT NULL,
+  text TEXT,
+  usage_json TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_outputs_run ON agent_outputs(run_id, id);
 CREATE TABLE IF NOT EXISTS token_usage (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   run_id TEXT,
@@ -462,6 +476,55 @@ class Storage:
             "SELECT * FROM agent_messages WHERE run_id=? AND id>? ORDER BY id ASC LIMIT ?",
             (run_id, after_id, limit),
         )
+
+    # ------------------------------------------------------- agent outputs
+    def add_agent_output(
+        self,
+        run_id: str,
+        agent_id: str | None,
+        *,
+        task_id: str | None = None,
+        stage: str | None = None,
+        model: str | None = None,
+        goal: str = "",
+        output: Any = None,
+        text: str = "",
+        usage: dict[str, Any] | None = None,
+    ) -> int:
+        cur = self._execute(
+            "INSERT INTO agent_outputs(run_id,agent_id,task_id,stage,model,goal,output_json,text,usage_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (
+                run_id,
+                agent_id,
+                task_id,
+                stage,
+                model,
+                goal,
+                json.dumps(output, ensure_ascii=False, default=str),
+                text,
+                json.dumps(usage or {}, ensure_ascii=False, default=str),
+                utcnow(),
+            ),
+        )
+        return int(cur.lastrowid or 0)
+
+    def list_agent_outputs(self, run_id: str, limit: int = 1000) -> list[dict[str, Any]]:
+        rows = self._query(
+            "SELECT * FROM agent_outputs WHERE run_id=? ORDER BY id ASC LIMIT ?",
+            (run_id, limit),
+        )
+        for row in rows:
+            try:
+                row["output"] = json.loads(row.get("output_json") or "null")
+            except json.JSONDecodeError:
+                row["output"] = None
+            try:
+                row["usage"] = json.loads(row.get("usage_json") or "{}")
+            except json.JSONDecodeError:
+                row["usage"] = {}
+            row.pop("output_json", None)
+            row.pop("usage_json", None)
+        return rows
 
     # ---------------------------------------------------------------- budget
     def record_usage(

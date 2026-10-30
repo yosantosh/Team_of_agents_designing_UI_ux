@@ -203,18 +203,21 @@ class ModelGateway:
             ]
             for image in images:
                 cmd.extend(["--file", str(image.resolve())])
-            cmd.append(prompt)
 
             try:
                 proc = await asyncio.create_subprocess_exec(
                     *cmd,
+                    stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=str(self.settings.opencode_cwd),
                 )
                 try:
+                    # OpenCode reads the message from stdin when no positional
+                    # message is supplied. This avoids the Linux ARG_MAX limit for
+                    # large intent packets and research contexts.
                     stdout_b, stderr_b = await asyncio.wait_for(
-                        proc.communicate(), timeout=agent_timeout
+                        proc.communicate(input=prompt.encode("utf-8")), timeout=agent_timeout
                     )
                 except asyncio.TimeoutError:
                     proc.kill()

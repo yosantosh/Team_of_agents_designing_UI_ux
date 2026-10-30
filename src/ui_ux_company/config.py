@@ -72,7 +72,7 @@ class Settings:
     model_override: str | None = None
     opencode_timeout: int = 300
     opencode_cwd: Path = PROJECT_ROOT
-    max_context_chars: int = 180000
+    max_context_chars: int = 1_000_000
     project_dir: Path | None = None
     project_id: str = "dhunchat"
 
@@ -138,7 +138,7 @@ class Settings:
             model_override=os.getenv("UIUX_MODEL_OVERRIDE") or None,
             opencode_timeout=_int("UIUX_OPENCODE_TIMEOUT", 300),
             opencode_cwd=_path("UIUX_OPENCODE_CWD", root, root),
-            max_context_chars=_int("UIUX_MAX_CONTEXT_CHARS", 180000),
+            max_context_chars=_int("UIUX_MAX_CONTEXT_CHARS", 1_000_000),
             autonomy_level=os.getenv("UIUX_AUTONOMY_LEVEL", "L2"),
             auto_approve=_bool("UIUX_AUTO_APPROVE", True),
             max_rework=_int("UIUX_MAX_REWORK", 2),

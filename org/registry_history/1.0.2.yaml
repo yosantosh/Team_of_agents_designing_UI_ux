@@ -1,0 +1,916 @@
+version: "1.0.2"
+organization: "Native Android UI/UX Agentic Company"
+owner: "Dictator (Human Product Owner / Manager)"
+description: >
+  A hierarchical, artifact-driven design organization that turns a Dictator decree
+  into a designed, implemented, verified, and maintainable native Android experience.
+  LangGraph is the control plane; LangSmith is the flight recorder and eval lab;
+  the control room is the human interface.
+
+defaults:
+  autonomy_level: L2                 # L0 advise | L1 spec | L2 PR | L3 auto-merge low risk | L4 auto-release
+  max_rework: 2
+  human_design_gate: true
+  target_ui_mode: auto               # auto | required | off
+  target_ui_precedence: tiered       # tiered | pixel_perfect | inspiration
+  target_ui_confidence_threshold: 0.80
+  demo_mode_allowed: true
+  max_context_chars: 18000
+  require_evidence_for_release: true
+  allow_unverified_release: false
+
+playbooks:
+  explore:
+    goal: "Research, evidence, and 2-3 design directions without implementation."
+    stages: [intake, target_ui, discovery, synthesis, design_system, visual_design, design_contract, critique, human_gate, learn]
+    stop_after: human_gate
+  design:
+    goal: "Full design package, independent critique, and Dictator approval."
+    stages: [intake, target_ui, discovery, synthesis, design_system, visual_design, design_contract, critique, human_gate, learn]
+  build:
+    goal: "Design package plus a surgical Compose implementation plan."
+    stages: [intake, target_ui, discovery, synthesis, design_system, visual_design, design_contract, critique, human_gate, implement, learn]
+  ship:
+    goal: "Design, implementation, real QA evidence, and release candidate."
+    stages: [intake, target_ui, discovery, synthesis, design_system, visual_design, design_contract, critique, human_gate, implement, qa, manager_eval, release, learn]
+  audit:
+    goal: "Critique and QA the current UI; no new visual direction unless the Dictator asks."
+    stages: [intake, research_current_ui, ia_audit, design_system_audit, critique, human_gate, qa, manager_eval, learn]
+  fix:
+    goal: "Fast, surgical micro-fix with visual diff and focused QA."
+    stages: [intake, target_ui, synthesis, visual_design, critique, human_gate, implement, qa, learn]
+
+models:
+  reasoner:
+    provider: opencode
+    model: modal/deepseek-v4.1-flash-1017
+    capabilities: [text, reasoning, tools]
+    context_tokens: 1048576
+    cost_per_million_input: 0.25
+    cost_per_million_output: 1.00
+    purpose: "Architecture, synthesis, critique, evolution diagnosis"
+  vision:
+    provider: opencode
+    model: modal/deepseek-v4.1-flash-1017
+    capabilities: [text, image, reasoning]
+    context_tokens: 1048576
+    cost_per_million_input: 0.25
+    cost_per_million_output: 1.00
+    purpose: "Target_ui image analysis, visual critique, screenshot review"
+  coder:
+    provider: opencode
+    model: modal/deepseek-v4.1-flash-1017
+    capabilities: [text, reasoning, code]
+    context_tokens: 1048576
+    cost_per_million_input: 0.25
+    cost_per_million_output: 1.00
+    purpose: "Implementation planning and code-worker prompts"
+  critic:
+    provider: opencode
+    model: modal/deepseek-v4.1-flash-1017
+    capabilities: [text, reasoning, image]
+    context_tokens: 1048576
+    cost_per_million_input: 0.25
+    cost_per_million_output: 1.00
+    purpose: "Independent red-team review; cross-model independence recommended in production"
+  cheap:
+    provider: opencode
+    model: modal/deepseek-v4.1-flash-1017
+    capabilities: [text]
+    context_tokens: 1048576
+    cost_per_million_input: 0.25
+    cost_per_million_output: 1.00
+    purpose: "Summaries, classification, low-risk maintenance at budget pressure"
+
+tiers:
+  - id: 0
+    name: "Executive & Orchestration"
+    purpose: "Intake, routing, budgets, escalation, release accountability"
+  - id: 1
+    name: "Discovery, Standards & Information Architecture"
+    purpose: "User truth, Android truth, flows, content, target-UI analysis"
+  - id: 2
+    name: "Design System, Visual Design & Critique"
+    purpose: "Tokens, components, screens, motion, independent critique"
+  - id: 3
+    name: "Native Android Engineering"
+    purpose: "Implementation plans, Compose code, integration, design engineering"
+  - id: 4
+    name: "Quality, Safety & Release"
+    purpose: "Visual, functional, accessibility, performance, security, T&S, release"
+  - id: 5
+    name: "Meta, Memory & Evolution"
+    purpose: "Design ops, evals, org memory, independent evolution proposals"
+
+tier_leads:
+  1: discovery_lead
+  2: design_lead
+  3: engineering_lead
+  4: quality_lead
+  5: meta_lead
+
+agents:
+  - id: ceo
+    title: "CEO — Company Operating Officer"
+    codename: "A1"
+    tier: 0
+    enabled: true
+    prompt_key: ceo
+    model: reasoner
+    reports_to: null
+    is_lead: true
+    real_world_equivalent: "Chief Executive Officer / Head of Product"
+    mission: "Own the company operating system, protect the Dictator's intent, set priorities and constraints, resolve cross-tier conflicts, and escalate only major or one-way-door decisions to the human Dictator."
+    inputs: [dictator_decree, company_brief, run_snapshot, budget, org_health]
+    outputs: [ceo_directive, priority_decision, escalation]
+    tools: [company_knowledge, registry, org_graph, budget_ledger]
+    gates: [ceo_review]
+    kpis: [strategic_alignment, escalation_quality, org_health]
+    failure_modes: [overreach, hiding_bad_news, bypassing_dictator]
+
+  - id: chief_orchestrator
+    title: "Chief UI/UX Orchestrator"
+    codename: "A2"
+    tier: 0
+    enabled: true
+    prompt_key: manager
+    model: reasoner
+    reports_to: ceo
+    is_lead: true
+    real_world_equivalent: "VP of Product Design & Principal Android Release Director"
+    mission: "Convert a Dictator decree into a task DAG, route it through the tier leads, enforce gates and budgets, and escalate only one-way-door decisions."
+    inputs: [change_request, company_brief, registry, project_profile, run_metrics]
+    outputs: [routing_plan, task_dag, evaluation_report, escalation]
+    tools: [company_knowledge, registry, artifact_store, event_bus, budget_ledger]
+    gates: [manager_evaluation]
+    kpis: [first_pass_yield, cycle_time, rework_rate, budget_adherence]
+    failure_modes: [scope_creep, silent_assumptions, self_grading, runaway_retries]
+
+  - id: discovery_lead
+    title: "Discovery & Standards Lead"
+    codename: "A3"
+    tier: 1
+    enabled: true
+    prompt_key: lead
+    model: reasoner
+    reports_to: chief_orchestrator
+    is_lead: true
+    manages: [product_analyst, ux_researcher, android_platform_designer, ia_interaction_designer, content_designer, target_ui_analyst, accessibility_specialist, localization_specialist]
+    real_world_equivalent: "Director of Product Discovery"
+    mission: "Manage Tier 1: frame the problem, gather evidence, enforce Android standards, own IA/flows, and make upstream design criteria testable."
+    inputs: [change_request, routing_plan, company_brief]
+    outputs: [discovery_brief, tier_status, escalations]
+    tools: [company_knowledge, artifact_store, event_bus]
+    gates: [tier_1_review]
+    kpis: [upstream_completeness, evidence_quality, rework_prevented]
+    failure_modes: [late_criteria, research_theater, hiding_conflicts]
+
+  - id: design_lead
+    title: "Design Lead"
+    codename: "A4"
+    tier: 2
+    enabled: true
+    prompt_key: lead
+    model: reasoner
+    reports_to: chief_orchestrator
+    is_lead: true
+    manages: [design_system_architect, component_design_engineer, visual_ui_designer, design_contract_editor, motion_haptics_designer, brand_illustration_designer, independent_design_critic]
+    real_world_equivalent: "Director of Product Design"
+    mission: "Manage Tier 2: design system, visual craft, motion, target fidelity, design contract, and independent critique."
+    inputs: [discovery_brief, design_system, target_manifest, routing_plan]
+    outputs: [design_decision, tier_status, escalations]
+    tools: [company_knowledge, artifact_store, event_bus]
+    gates: [design_critique, tier_2_review]
+    kpis: [first_pass_critique, target_fidelity, design_consistency]
+    failure_modes: [taste_bias, crit_bypass, contract_averaging]
+
+  - id: engineering_lead
+    title: "Engineering Lead"
+    codename: "A5"
+    tier: 3
+    enabled: true
+    prompt_key: lead
+    model: coder
+    opencode_agent: uiux-reader
+    opencode_timeout: 600
+    reports_to: chief_orchestrator
+    is_lead: true
+    manages: [android_tech_lead, compose_implementer, design_engineer, motion_shader_engineer]
+    real_world_equivalent: "Director of Android Design Engineering"
+    mission: "Manage Tier 3: implementation architecture, Compose, design-code parity, shared-file ownership, and merge safety."
+    inputs: [design_contract, screen_spec, repo_state, routing_plan]
+    outputs: [implementation_decision, tier_status, escalations]
+    tools: [company_knowledge, git_worktree, gradle, event_bus]
+    gates: [code_review, tier_3_review]
+    kpis: [build_success, visual_fidelity, merge_conflicts]
+    failure_modes: [shared_file_collisions, over_engineering, silent_scope_change]
+
+  - id: quality_lead
+    title: "Quality & Release Lead"
+    codename: "A6"
+    tier: 4
+    enabled: true
+    prompt_key: lead
+    model: reasoner
+    reports_to: chief_orchestrator
+    is_lead: true
+    manages: [visual_qa_inspector, functional_a11y_qa, performance_qa, security_privacy_reviewer, trust_safety_reviewer, release_manager, analytics_experimentation_lead]
+    real_world_equivalent: "Director of Quality & Release"
+    mission: "Manage Tier 4: visual, functional, accessibility, performance, security, T&S, and release evidence. Block unverified releases."
+    inputs: [implementation, screen_spec, current_ui_manifest, target_manifest, routing_plan]
+    outputs: [quality_decision, tier_status, release_recommendation, escalations]
+    tools: [company_knowledge, screenshot_capture, device_farm, event_bus]
+    gates: [visual_qa, functional_a11y, release, tier_4_review]
+    kpis: [defect_escape, a11y_defect_escape, rollback_rate]
+    failure_modes: [rubber_stamping, missing_evidence, flagship_only]
+
+  - id: meta_lead
+    title: "Meta, Memory & Evolution Lead"
+    codename: "A7"
+    tier: 5
+    enabled: true
+    prompt_key: lead
+    model: reasoner
+    reports_to: chief_orchestrator
+    is_lead: true
+    manages: [design_ops_librarian, eval_red_team, org_evolution_auditor]
+    real_world_equivalent: "Director of Design Operations & AI Quality"
+    mission: "Manage Tier 5: org memory, design debt, evals, red-team, and independent evolution proposals. Never self-approve."
+    inputs: [run_history, token_ledger, qa_reports, registry, eval_reports]
+    outputs: [memory_update, eval_report, evolution_proposal]
+    tools: [company_knowledge, registry, analytics, langsmith_optional]
+    gates: [eval_review, evolution_approval]
+    kpis: [memory_recall, eval_coverage, proposal_hit_rate]
+    failure_modes: [change_for_change, self_approval, stale_memory]
+
+  - id: product_analyst
+    title: "Product Analyst"
+    tier: 1
+    enabled: true
+    prompt_key: product_analyst
+    model: reasoner
+    real_world_equivalent: "Staff Product Manager / Product Strategist"
+    mission: "Frame the problem, define success metrics, identify users and constraints, and turn the decree into a testable product brief."
+    inputs: [dictator_prompt, project_profile, prior_artifacts]
+    outputs: [product_brief, change_classification, acceptance_criteria]
+    tools: [artifact_store]
+    gates: [product_brief_review]
+    kpis: [brief_completeness, metric_quality, scope_clarity]
+    failure_modes: [vague_metrics, solutioning_before_problem, scope_inflation]
+
+  - id: ux_researcher
+    title: "UX Researcher"
+    tier: 1
+    enabled: true
+    prompt_key: ux_researcher
+    model: reasoner
+    real_world_equivalent: "Senior Staff UX Researcher"
+    mission: "Gather user evidence, competitive patterns, friction points, and usability risks; label evidence strength and unknowns."
+    inputs: [product_brief, target_manifest, available_analytics, support_signals]
+    outputs: [research_findings, evidence_table, unknowns]
+    tools: [artifact_store, web_research_optional, analytics_optional]
+    gates: [research_review]
+    kpis: [evidence_coverage, assumption_disclosure, decision_usefulness]
+    failure_modes: [invented_users, competitor_copying, confirmation_bias]
+
+  - id: android_platform_designer
+    title: "Android Platform & Guidelines Specialist"
+    tier: 1
+    enabled: true
+    prompt_key: android_platform
+    model: reasoner
+    real_world_equivalent: "Android Platform UX Specialist"
+    mission: "Enforce native Android behavior: predictive back, edge-to-edge, IME, adaptive layouts, foldables, permissions, system bars, accessibility conventions."
+    inputs: [product_brief, project_profile]
+    outputs: [android_constraints, platform_risks, required_states]
+    tools: [artifact_store, android_docs_optional]
+    gates: [platform_review]
+    kpis: [platform_defect_rate, adaptive_coverage, permission_ux_quality]
+    failure_modes: [ios_isms, ignoring_back_navigation, ignoring_foldables]
+
+  - id: ia_interaction_designer
+    title: "IA & Interaction Designer"
+    tier: 1
+    enabled: true
+    prompt_key: ia_interaction
+    model: reasoner
+    real_world_equivalent: "Lead Interaction Designer (IxD)"
+    mission: "Define information architecture, navigation, task flows, gestures, hierarchy, and all six non-happy states."
+    inputs: [product_brief, research_findings, android_constraints, target_manifest]
+    outputs: [user_flows, screen_inventory, state_matrix, interaction_rules]
+    tools: [artifact_store]
+    gates: [ia_review]
+    kpis: [flow_completeness, state_coverage, navigation_clarity]
+    failure_modes: [happy_path_only, missing_offline, hidden_actions]
+
+  - id: content_designer
+    title: "Content Designer"
+    tier: 1
+    enabled: false
+    prompt_key: content_design
+    model: reasoner
+    real_world_equivalent: "Senior Content Designer / UX Writer"
+    mission: "Own microcopy, tone, errors, empty states, permissions rationale, and localization-ready strings."
+    inputs: [user_flows, screen_inventory, brand_voice]
+    outputs: [content_spec, string_catalog, tone_rules]
+    tools: [artifact_store]
+    gates: [content_review]
+    kpis: [clarity, consistency, localization_readiness]
+    failure_modes: [generic_errors, tone_drift, hardcoded_strings]
+
+  - id: target_ui_analyst
+    title: "Target_ui Vision Analyst"
+    tier: 1
+    enabled: true
+    prompt_key: target_ui_analyst
+    model: vision
+    real_world_equivalent: "Design Reference Librarian + Visual Analyst"
+    mission: "Ingest Target_ui images, map them to screens, extract layout/components/tokens, flag conflicts, and assign confidence."
+    inputs: [target_images, project_profile, design_tokens, android_constraints]
+    outputs: [target_manifest, target_spec, conflict_report]
+    tools: [vision_model, artifact_store, image_metadata]
+    gates: [target_ui_review]
+    kpis: [screen_mapping_accuracy, conflict_detection, confidence_calibration]
+    failure_modes: [silent_guessing, copying_brand_assets, ignoring_confidence]
+
+  - id: accessibility_specialist
+    title: "Accessibility Specialist"
+    tier: 1
+    enabled: false
+    prompt_key: accessibility
+    model: reasoner
+    real_world_equivalent: "Staff Accessibility Designer"
+    mission: "Shift accessibility left: WCAG 2.2 AA, TalkBack, switch access, focus order, contrast, dynamic type, reduced motion."
+    inputs: [user_flows, screen_specs, design_tokens]
+    outputs: [a11y_requirements, a11y_review]
+    tools: [artifact_store, accessibility_scanner_optional]
+    gates: [a11y_review]
+    kpis: [a11y_defects, contrast_pass_rate, focus_order_quality]
+    failure_modes: [contrast_afterthought, missing_content_descriptions, tiny_targets]
+
+  - id: localization_specialist
+    title: "Localization Specialist"
+    tier: 1
+    enabled: false
+    prompt_key: localization
+    model: reasoner
+    real_world_equivalent: "Internationalization Design Lead"
+    mission: "RTL, pseudo-localization, string expansion, plurals, date/number formats, cultural color and icon meaning."
+    inputs: [content_spec, screen_specs, target_locales]
+    outputs: [localization_requirements, pseudo_locale_report]
+    tools: [artifact_store, android_lint_optional]
+    gates: [localization_review]
+    kpis: [string_expansion_breaks, RTL_defects, pluralization_errors]
+    failure_modes: [english_only_layout, hardcoded_formats, cultural_mismatch]
+
+  - id: design_system_architect
+    title: "Design System Architect"
+    tier: 2
+    enabled: true
+    prompt_key: design_system
+    model: reasoner
+    real_world_equivalent: "Staff Design Systems Architect"
+    mission: "Own the single source of truth for color, type, spacing, radius, elevation, motion primitives, themes, versioning, and deprecation."
+    inputs: [user_flows, project_profile, existing_tokens, target_manifest]
+    outputs: [design_tokens, token_delta, theme_rules]
+    tools: [artifact_store, token_validator]
+    gates: [design_system_review]
+    kpis: [token_adoption, hardcoded_value_count, breaking_change_rate]
+    failure_modes: [token_proliferation, breaking_changes, undocumented_deprecation]
+
+  - id: component_design_engineer
+    title: "Component Design Engineer"
+    tier: 2
+    enabled: false
+    prompt_key: component_design
+    model: coder
+    real_world_equivalent: "Design Systems Component Lead"
+    mission: "Turn tokens into reusable component contracts: slots, states, behaviors, Compose API, previews, and design-code parity."
+    inputs: [design_tokens, user_flows, existing_components]
+    outputs: [component_spec, component_api, state_matrix]
+    tools: [artifact_store, compose_preview_optional]
+    gates: [component_review]
+    kpis: [component_reuse, state_coverage, api_stability]
+    failure_modes: [one_off_components, missing_states, api_breakage]
+
+  - id: visual_ui_designer
+    title: "Visual UI Designer"
+    tier: 2
+    enabled: true
+    prompt_key: visual_designer
+    model: vision
+    real_world_equivalent: "Senior Product Designer (Visual & Prototyping)"
+    mission: "Compose high-fidelity screen specs from approved tokens and components; make the primary action unmistakable; reconcile Target_ui."
+    inputs: [user_flows, design_tokens, component_spec, target_manifest, critique]
+    outputs: [screen_spec, screen_preview_brief, design_rationale]
+    tools: [artifact_store, target_images, compose_preview_optional]
+    gates: [design_critique]
+    kpis: [critique_first_pass, target_fidelity, hierarchy_score]
+    failure_modes: [token_drift, decorative_noise, target_mismatch]
+
+  - id: design_contract_editor
+    title: "Design Contract Editor"
+    tier: 2
+    enabled: true
+    prompt_key: design_contract
+    model: reasoner
+    real_world_equivalent: "Design Program Lead / Cross-functional Design Editor"
+    mission: "Reconcile synthesis, tokens, screen spec, and target reference into one authoritative design contract; resolve contradictions explicitly before critique and implementation."
+    inputs: [synthesis, design_tokens, screen_spec, target_manifest, change_request]
+    outputs: [design_contract, conflict_resolution_log]
+    tools: [artifact_store]
+    gates: [design_critique, manager_evaluation]
+    kpis: [contract_completeness, contradiction_count, rework_reduction]
+    failure_modes: [averaging_conflicts, inventing_components, hiding_open_questions]
+
+  - id: motion_haptics_designer
+    title: "Motion & Haptics Designer"
+    tier: 2
+    enabled: false
+    prompt_key: motion_haptics
+    model: reasoner
+    real_world_equivalent: "Staff Motion Designer / Creative Technologist"
+    mission: "Design transitions, spring physics, haptics, reduced-motion behavior, and performance budgets."
+    inputs: [screen_spec, component_spec, device_matrix]
+    outputs: [motion_spec, haptic_spec, performance_budget]
+    tools: [artifact_store]
+    gates: [motion_review]
+    kpis: [jank, motion_consistency, reduced_motion_coverage]
+    failure_modes: [gratuitous_animation, no_reduced_motion, jank_on_low_end]
+
+  - id: brand_illustration_designer
+    title: "Brand & Illustration Designer"
+    tier: 2
+    enabled: false
+    prompt_key: brand
+    model: vision
+    real_world_equivalent: "Brand Designer / Illustrator"
+    mission: "Own iconography, illustration, empty-state art, brand expression, and asset licensing."
+    inputs: [brand_guidelines, screen_spec, design_tokens]
+    outputs: [asset_spec, icon_rules, brand_review]
+    tools: [artifact_store, image_generation_optional]
+    gates: [brand_review]
+    kpis: [brand_consistency, asset_weight, license_compliance]
+    failure_modes: [mixed_icon_styles, unlicensed_assets, heavy_illustrations]
+
+  - id: independent_design_critic
+    title: "Independent Design Critic"
+    tier: 2
+    enabled: true
+    prompt_key: design_critic
+    model: critic
+    real_world_equivalent: "Design Critique Bar Raiser"
+    mission: "Clean-context red-team review. Judge hierarchy, token adherence, states, target fidelity, Android law, and accessibility. Cannot author."
+    inputs: [screen_spec, design_tokens, user_flows, target_manifest, product_brief]
+    outputs: [design_critique, gate_result, rework_instructions]
+    tools: [rubric, artifact_store]
+    gates: [design_critique]
+    kpis: [defect_catch_rate, false_positive_rate, calibration]
+    failure_modes: [rubber_stamping, author_bias, vague_feedback]
+
+  - id: android_tech_lead
+    title: "Android Tech Lead"
+    tier: 3
+    enabled: false
+    prompt_key: android_tech_lead
+    model: coder
+    opencode_agent: uiux-reader
+    opencode_timeout: 600
+    real_world_equivalent: "Staff Android Design Engineer"
+    mission: "Own implementation architecture, shared-file changes, code review, merge queue, and integration risk."
+    inputs: [screen_spec, component_spec, repo_state]
+    outputs: [implementation_plan, code_review, integration_risk]
+    tools: [git_worktree, gradle, code_worker]
+    gates: [code_review]
+    kpis: [build_success, review_findings, merge_conflicts]
+    failure_modes: [shared_file_collisions, scope_creep, broken_builds]
+
+  - id: compose_implementer
+    title: "Compose Feature Implementer"
+    tier: 3
+    enabled: true
+    prompt_key: compose_implementer
+    model: coder
+    opencode_agent: uiux-reader
+    opencode_timeout: 600
+    real_world_equivalent: "Senior Android Design Engineer"
+    mission: "Translate approved specs into modular Compose UI, unidirectional state, previews, and tests in an isolated worktree."
+    inputs: [screen_spec, component_spec, design_tokens, repo_state]
+    outputs: [implementation_plan, code_patch, preview_manifest, tests]
+    tools: [git_worktree, gradle, code_worker]
+    gates: [code_review, visual_qa, functional_a11y]
+    kpis: [first_build_success, visual_diff_pass, recomposition_jank]
+    failure_modes: [hardcoded_tokens, state_leaks, missing_states]
+
+  - id: design_engineer
+    title: "Design Engineer"
+    tier: 3
+    enabled: false
+    prompt_key: design_engineer
+    model: coder
+    opencode_agent: uiux-reader
+    opencode_timeout: 600
+    real_world_equivalent: "Design Engineering Lead"
+    mission: "Bridge design and code: token pipeline, component library, visual fidelity, motion/glass/shaders, design-code parity."
+    inputs: [design_tokens, component_spec, screen_spec, repo_state]
+    outputs: [platform_change, parity_report, shared_component]
+    tools: [git_worktree, gradle, screenshot_capture]
+    gates: [design_engineering_review]
+    kpis: [design_code_drift, component_reuse, render_fidelity]
+    failure_modes: [token_pipeline_drift, one_off_glass, render_mismatch]
+
+  - id: motion_shader_engineer
+    title: "Motion & Shader Engineer"
+    tier: 3
+    enabled: false
+    prompt_key: motion_shader
+    model: coder
+    real_world_equivalent: "Staff Android Creative Technologist"
+    mission: "Implement AGSL/RenderEffect, spring physics, shared-element transitions, and low-end fallbacks."
+    inputs: [motion_spec, screen_spec, device_matrix]
+    outputs: [shader_code, fallback_plan, performance_report]
+    tools: [git_worktree, gradle, gpu_profiler]
+    gates: [performance_qa]
+    kpis: [frame_time, fallback_coverage, battery_impact]
+    failure_modes: [no_fallback, gpu_overdraw, battery_drain]
+
+  - id: visual_qa_inspector
+    title: "Visual QA Inspector"
+    tier: 4
+    enabled: true
+    prompt_key: visual_qa
+    model: vision
+    real_world_equivalent: "Visual QA Automation Lead"
+    mission: "Compare rendered screenshots to approved specs/targets across the device matrix; catch clipping, overlap, contrast, and spacing defects."
+    inputs: [screenshots, screen_spec, target_manifest, device_matrix]
+    outputs: [visual_qa_report, diff_images, gate_result]
+    tools: [screenshot_capture, image_diff, artifact_store]
+    gates: [visual_qa]
+    kpis: [visual_defect_escape, false_positive_rate, device_coverage]
+    failure_modes: [single_device_only, no_target, baseline_drift]
+
+  - id: functional_a11y_qa
+    title: "Functional & Accessibility QA"
+    tier: 4
+    enabled: true
+    prompt_key: functional_a11y_qa
+    model: reasoner
+    real_world_equivalent: "Staff Android Quality & Accessibility Engineer"
+    mission: "Verify interactions, navigation, state handling, TalkBack, focus order, font scale, contrast, touch targets, and offline/error behavior."
+    inputs: [test_report, uiautomator_dump, screen_spec, a11y_requirements]
+    outputs: [functional_qa_report, a11y_report, gate_result]
+    tools: [emulator, uiautomator, accessibility_checks]
+    gates: [functional_a11y]
+    kpis: [a11y_defects, state_coverage, regression_rate]
+    failure_modes: [happy_path_only, no_talkback, missing_offline]
+
+  - id: performance_qa
+    title: "Performance QA"
+    tier: 4
+    enabled: false
+    prompt_key: performance_qa
+    model: reasoner
+    real_world_equivalent: "Staff Android Performance Engineer"
+    mission: "Verify startup, jank, memory, APK size, network behavior, Compose stability, and baseline profiles."
+    inputs: [macrobenchmark_report, perfetto_trace, device_matrix]
+    outputs: [performance_report, gate_result]
+    tools: [macrobenchmark, perfetto, gradle]
+    gates: [performance_qa]
+    kpis: [startup_ms, jank_pct, memory_mb, apk_mb]
+    failure_modes: [flagship_only, no_baseline, ignored_regression]
+
+  - id: security_privacy_reviewer
+    title: "Security & Privacy Reviewer"
+    tier: 4
+    enabled: false
+    prompt_key: security_privacy
+    model: reasoner
+    real_world_equivalent: "Security & Privacy Design Partner"
+    mission: "Review permissions, PII, logging, secrets, data retention, prompt injection, supply chain, and Play policy implications."
+    inputs: [screen_spec, data_flows, permissions, dependencies]
+    outputs: [security_review, privacy_review, gate_result]
+    tools: [static_analysis, secret_scan, policy_checklist]
+    gates: [security_privacy]
+    kpis: [critical_findings, permission_justification, secret_leaks]
+    failure_modes: [afterthought_review, over_permission, pii_in_logs]
+
+  - id: trust_safety_reviewer
+    title: "Trust & Safety Reviewer"
+    tier: 4
+    enabled: false
+    prompt_key: trust_safety
+    model: reasoner
+    real_world_equivalent: "Trust & Safety Product Partner"
+    mission: "Review reporting/blocking, minors, harassment, content warnings, moderation UX, and regional policy for social surfaces."
+    inputs: [screen_spec, user_flows, policy_requirements]
+    outputs: [trust_safety_review, gate_result]
+    tools: [policy_checklist, artifact_store]
+    gates: [trust_safety]
+    kpis: [safety_flow_coverage, report_completion, policy_conflicts]
+    failure_modes: [missing_report_path, no_block_path, minor_risk]
+
+  - id: release_manager
+    title: "Release Manager"
+    tier: 4
+    enabled: true
+    prompt_key: release_manager
+    model: reasoner
+    real_world_equivalent: "Android Release Manager"
+    mission: "Assemble the release candidate, verify gates, define staged rollout and rollback, and own post-release monitoring."
+    inputs: [qa_reports, evaluation, release_notes, rollout_plan]
+    outputs: [release_candidate, rollout_plan, rollback_plan]
+    tools: [git, ci, feature_flags, play_console_optional]
+    gates: [release]
+    kpis: [rollback_rate, crash_free, release_cycle_time]
+    failure_modes: [unverified_release, no_rollback, big_bang_rollout]
+
+  - id: analytics_experimentation_lead
+    title: "Analytics & Experimentation Lead"
+    tier: 4
+    enabled: false
+    prompt_key: analytics
+    model: reasoner
+    real_world_equivalent: "Data Science / Experimentation Lead"
+    mission: "Define event taxonomy, funnels, guardrail metrics, A/B/n design, and post-launch readouts."
+    inputs: [product_brief, screen_spec, success_metrics]
+    outputs: [instrumentation_plan, experiment_plan, readout]
+    tools: [analytics_optional, artifact_store]
+    gates: [experiment_review]
+    kpis: [metric_coverage, experiment_quality, decision_latency]
+    failure_modes: [vanity_metrics, no_guardrails, underpowered_tests]
+
+  - id: design_ops_librarian
+    title: "Design Ops Librarian"
+    tier: 5
+    enabled: false
+    prompt_key: design_ops
+    model: reasoner
+    real_world_equivalent: "Design Program Manager / Design Ops Lead"
+    mission: "Own artifact taxonomy, research repository, templates, design debt, decision records, provenance, and onboarding."
+    inputs: [all_artifacts, run_history, registry]
+    outputs: [memory_entry, design_debt_register, index_update]
+    tools: [artifact_store, registry, git]
+    gates: [memory_review]
+    kpis: [artifact_findability, decision_recall, debt_age]
+    failure_modes: [artifact_sprawl, lost_decisions, stale_docs]
+
+  - id: eval_red_team
+    title: "Eval & Red Team"
+    tier: 5
+    enabled: false
+    prompt_key: eval_red_team
+    model: critic
+    real_world_equivalent: "AI Quality / Red Team Lead"
+    mission: "Build golden tasks, calibrate judges, run regressions, inject failures, test prompt injection, and score agents."
+    inputs: [run_history, evals, traces, proposals]
+    outputs: [eval_report, agent_scorecards, regression_alerts]
+    tools: [langsmith_optional, eval_harness, artifact_store]
+    gates: [eval_review]
+    kpis: [eval_coverage, judge_calibration, regression_escape]
+    failure_modes: [self_grading, benchmark_overfit, stale_evals]
+
+  - id: org_evolution_auditor
+    title: "Org Evolution Auditor"
+    tier: 5
+    enabled: true
+    prompt_key: org_evolution
+    model: reasoner
+    real_world_equivalent: "Independent Operating Model Auditor"
+    mission: "Observe traces, rework, cost, defects, and drift; propose evidence-backed org changes. Cannot apply changes or approve itself."
+    inputs: [run_metrics, token_ledger, qa_reports, registry, eval_reports]
+    outputs: [evolution_proposal, expected_impact, rollback_plan]
+    tools: [registry, analytics, langsmith_optional]
+    gates: [evolution_approval]
+    kpis: [proposal_hit_rate, cost_saved, quality_delta]
+    failure_modes: [change_for_change, self_approval, unmeasured_claims]
+
+pods:
+  - id: feed
+    name: "Feed / Home"
+    screens: [home_feed, post_card, story_bar, comments]
+    primary_agents: [visual_ui_designer, compose_implementer, visual_qa_inspector]
+    target_ui_hint: "High-density media feed; hierarchy within 0.5s; stable scroll."
+  - id: profile
+    name: "Profile / Identity"
+    screens: [profile_header, media_grid, moments, edit_profile, followers]
+    primary_agents: [visual_ui_designer, compose_implementer, visual_qa_inspector]
+    target_ui_hint: "Identity-first; media categories; long usernames; empty grid."
+  - id: messages
+    name: "Messages / Chat"
+    screens: [inbox, conversation, message_requests, composer, media_attachment]
+    primary_agents: [visual_ui_designer, compose_implementer, functional_a11y_qa]
+    target_ui_hint: "Realtime states, unread badges, keyboard/IME, offline queue."
+  - id: create
+    name: "Create / Publish"
+    screens: [create_post, story_composer, reel_composer, audience_picker, upload_progress]
+    primary_agents: [visual_ui_designer, compose_implementer, functional_a11y_qa]
+    target_ui_hint: "Low-friction publish, permission rationale, progress/retry."
+  - id: explore
+    name: "Explore / Search"
+    screens: [explore_grid, search_suggestions, results, filters, people_search]
+    primary_agents: [visual_ui_designer, compose_implementer, visual_qa_inspector]
+    target_ui_hint: "Visual discovery, query states, empty/error, content density."
+  - id: notifications
+    name: "Notifications"
+    screens: [activity, notification_detail, badges, preferences]
+    primary_agents: [visual_ui_designer, compose_implementer, functional_a11y_qa]
+    target_ui_hint: "Scanability, grouping, unread state, red indicator-only rule."
+  - id: onboarding
+    name: "Onboarding / Auth / Settings"
+    screens: [splash, login, signup, permissions, settings, privacy]
+    primary_agents: [visual_ui_designer, compose_implementer, functional_a11y_qa]
+    target_ui_hint: "Trust, clarity, permission timing, error recovery."
+  - id: media_rooms
+    name: "Media / Player / Rooms"
+    screens: [mini_player, now_playing, queue, live_room, room_chat]
+    primary_agents: [visual_ui_designer, compose_implementer, performance_qa]
+    target_ui_hint: "Album-art liquid glass only exception; audio focus; background states."
+  - id: safety
+    name: "Safety / Moderation"
+    screens: [report, block, mute, content_warning, appeal]
+    primary_agents: [visual_ui_designer, compose_implementer, trust_safety_reviewer]
+    target_ui_hint: "Clear consequences, reversible actions, vulnerable-user protection."
+
+gates:
+  - id: product_brief_review
+    owner: product_analyst
+    required: true
+    sla_minutes: 1440
+    pass_criteria: "Problem, users, success metrics, constraints, non-goals, and acceptance criteria are explicit."
+  - id: ceo_review
+    owner: ceo
+    required: false
+    sla_minutes: 240
+    condition: "L4 autonomy, or a cross-tier / one-way-door decision."
+    pass_criteria: "The CEO agent records a directive, constraints, and any escalation to the Dictator."
+  - id: tier_1_review
+    owner: discovery_lead
+    required: true
+    sla_minutes: 480
+    pass_criteria: "Upstream criteria are complete, evidence-backed, and testable before design."
+  - id: tier_2_review
+    owner: design_lead
+    required: true
+    sla_minutes: 480
+    pass_criteria: "Design contract is coherent and the critic has reviewed it."
+  - id: tier_3_review
+    owner: engineering_lead
+    required: true
+    sla_minutes: 480
+    pass_criteria: "Implementation plan is buildable and shared-file changes are owned."
+  - id: tier_4_review
+    owner: quality_lead
+    required: true
+    sla_minutes: 240
+    pass_criteria: "Real QA evidence exists and release blockers are explicit."
+  - id: tier_5_review
+    owner: meta_lead
+    required: true
+    sla_minutes: 1440
+    pass_criteria: "Memory, eval, and evolution evidence is recorded."
+  - id: design_critique
+    owner: independent_design_critic
+    required: true
+    sla_minutes: 240
+    pass_criteria: "Rubric: every blocker criterion scores >= 3/4; non-blocker findings are deferred. Max 2 rework cycles, then the design lead issues a binding disposition."
+    rubric:
+      scale: "0-4"
+      blocker_min: 3
+      max_rework: 2
+      non_blocker_policy: "deferred_backlog"
+      criteria:
+        - single_primary_action
+        - copy_quietness
+        - layout_360dp
+        - font_scale_200
+        - state_coverage
+  - id: human_design_approval
+    owner: dictator
+    required: true
+    sla_minutes: 1440
+    pass_criteria: "Dictator approves the design direction or explicitly overrides with a recorded rationale."
+  - id: visual_qa
+    owner: visual_qa_inspector
+    required: true
+    sla_minutes: 240
+    pass_criteria: "All captured screens pass perceptual/pixel thresholds on the required device matrix; no critical clipping/overlap/contrast defects."
+  - id: functional_a11y
+    owner: functional_a11y_qa
+    required: true
+    sla_minutes: 240
+    pass_criteria: "All critical flows pass; no critical a11y defects; 48dp targets; TalkBack labels; 200% font; offline/error states verified."
+  - id: security_privacy
+    owner: security_privacy_reviewer
+    required: false
+    sla_minutes: 240
+    condition: "Feature touches permissions, PII, auth, payments, or external content."
+  - id: trust_safety
+    owner: trust_safety_reviewer
+    required: false
+    sla_minutes: 240
+    condition: "Feature touches reporting, blocking, minors, moderation, or public content."
+  - id: manager_evaluation
+    owner: chief_orchestrator
+    required: true
+    sla_minutes: 120
+    pass_criteria: "All required gates pass; evidence is present; budget and scope are within policy."
+  - id: release
+    owner: release_manager
+    required: true
+    sla_minutes: 240
+    pass_criteria: "Release candidate, rollout plan, rollback plan, monitoring plan, and Dictator release approval exist."
+  - id: evolution_approval
+    owner: dictator
+    required: true
+    sla_minutes: 1440
+    pass_criteria: "Dictator approves, rejects, or dictates the evolution proposal."
+
+artifact_types:
+  - product_brief
+  - change_request
+  - target_manifest
+  - research_findings
+  - android_constraints
+  - user_flows
+  - design_tokens
+  - component_spec
+  - screen_spec
+  - design_critique
+  - intent_packet
+  - implementation_plan
+  - code_patch
+  - intent_coverage
+  - visual_qa_report
+  - functional_qa_report
+  - a11y_report
+  - performance_report
+  - security_review
+  - trust_safety_review
+  - evaluation_report
+  - release_candidate
+  - learnings
+  - evolution_proposal
+
+evolution_policy:
+  proposer: org_evolution_auditor
+  approver: dictator
+  shadow_eval_required: true
+  canary_required: true
+  rollback_required: true
+  self_approval_forbidden: true
+  immutable:
+    - safety_policy
+    - approval_policy
+    - data_access_policy
+    - release_authority
+  mutable:
+    - agent_enabled
+    - model_alias
+    - prompt_version
+    - routing_weights
+    - gate_thresholds
+    - budget_caps
+    - pod_composition
+    - tool_allowlist
+
+evolution_history:
+  - proposal_id: "evo_20261029_220836_3d847925"
+    applied_at: "2026-10-29T22:08:53.703099+00:00"
+    from_version: "1.0.0"
+    to_version: "1.0.1"
+    change_type: "gate_threshold"
+    target: "design_critique"
+    summary: "Normalized the rubric-scored design acceptance gate into structured gate fields (blocker floor, deferred non-blockers, max 2 rework cycles)."
+  - proposal_id: "manual_20261030_residual_intent_bus"
+    applied_at: "2026-10-30T00:30:00+00:00"
+    from_version: "1.0.1"
+    to_version: "1.0.2"
+    change_type: "manual_config"
+    target: "tier_3_engineering_roles"
+    summary: "Bound A5/A19/A25 to the read-only uiux-reader OpenCode agent for repo inspection; actual edits remain with the isolated build worker."
+
+metrics:
+  - id: first_pass_yield
+    definition: "Runs that pass design critique and QA without rework / total runs"
+    target: ">= 0.60"
+  - id: rework_rate
+    definition: "Rework loops per completed screen"
+    target: "<= 1.0"
+  - id: cycle_time
+    definition: "Median wall-clock time from decree to release candidate"
+    target: "trend down"
+  - id: cost_per_screen
+    definition: "Estimated token cost per approved screen"
+    target: "trend down"
+  - id: visual_defect_escape
+    definition: "Visual defects found after release / released screens"
+    target: "<= 0.05"
+  - id: a11y_defect_escape
+    definition: "Critical a11y defects found after release"
+    target: "0"
+  - id: human_override_rate
+    definition: "Dictator overrides / approvals"
+    target: "trend down but never zero"
+  - id: budget_adherence
+    definition: "Token spend within monthly cap"
+    target: "100%"

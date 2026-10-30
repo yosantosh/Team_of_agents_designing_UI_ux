@@ -20,6 +20,7 @@ const state = {
   runState: {},
   events: [],
   messages: [],
+  agentOutputs: [],
   artifacts: [],
   currentManifest: null,
   contract: null,
@@ -412,11 +413,16 @@ function renderRunMeta() {
     $("run-meta").textContent = "No run selected. Issue a decree to begin.";
     $("stop-run").disabled = true;
     $("flow-stop-run").disabled = true;
+    $("resume-run").disabled = true;
+    $("flow-resume-run").disabled = true;
     return;
   }
   const terminal = ["completed", "failed", "stopped", "escalated"].includes(run.status);
+  const resumable = ["failed", "stopped"].includes(run.status) && Boolean((state.runState?.next || []).length);
   $("stop-run").disabled = terminal;
   $("flow-stop-run").disabled = terminal;
+  $("resume-run").disabled = !resumable;
+  $("flow-resume-run").disabled = !resumable;
   const values = state.runState?.values || {};
   $("run-status").textContent = run.status;
   $("run-status").className = `status ${statusClass(run.status)}`;
@@ -554,6 +560,7 @@ async function loadRun(runId, connect = true) {
     state.runState = data.state || {};
     state.events = data.events || [];
     state.messages = data.messages || [];
+    state.agentOutputs = data.agent_outputs || [];
     state.artifacts = data.artifacts || [];
     state.flowRunId = runId;
     state.artifactRunId = runId;
@@ -581,6 +588,7 @@ function clearRunContext({ render = true } = {}) {
   state.runState = {};
   state.events = [];
   state.messages = [];
+  state.agentOutputs = [];
   state.artifacts = [];
   state.agentStatus = {};
   state.flowRunId = null;
@@ -1109,6 +1117,8 @@ function renderAgentWindow() {
   );
   const events = (state.events || []).filter((event) => event.agent_id === agentId);
   const artifacts = (state.artifacts || []).filter((artifact) => artifact.created_by === agentId);
+  const outputs = (state.agentOutputs || []).filter((output) => output.agent_id === agentId);
+  const latestOutput = outputs[outputs.length - 1];
   const usage = state.budget?.by_agent?.[agentId] || 0;
   const current = agentId === "dictator"
     ? (state.approvals?.length ? `${state.approvals.length} decision(s) waiting for you.` : "No decisions waiting right now.")
@@ -1147,7 +1157,9 @@ function renderAgentWindow() {
     <div class="timeline">${liveEvents || `<div class="muted">No events yet.</div>`}</div>
     <h3>Connections</h3>
     <div class="agent-connections">${connections || `<div class="muted">No connections yet.</div>`}</div>
-    <h3>Outputs (${artifacts.length})</h3>
+    <h3>Latest agent output (${outputs.length})</h3>
+    ${latestOutput ? `<pre>${escapeHtml(short(latestOutput.text || JSON.stringify(latestOutput.output || {}, null, 2), 3200))}</pre>` : `<div class="muted">No saved output yet.</div>`}
+    <h3>Artifacts (${artifacts.length})</h3>
     <div class="list">${artifactHtml || `<div class="muted">No artifacts produced yet.</div>`}</div>
   `;
   el.classList.remove("hidden");
@@ -2234,6 +2246,8 @@ $("approval-subtabs").addEventListener("click", (event) => {
 $("open-flow").addEventListener("click", () => openFullFlow());
 $("stop-run").addEventListener("click", () => stopRun(state.runId));
 $("flow-stop-run").addEventListener("click", () => stopRun(state.flowRunId || state.runId));
+$("resume-run").addEventListener("click", () => resumeRun(state.runId));
+$("flow-resume-run").addEventListener("click", () => resumeRun(state.flowRunId || state.runId));
 $("open-evolution").addEventListener("click", () => switchTab("evolution"));
 $("flow-run-select").addEventListener("change", (event) => { loadRun(event.target.value, true); });
 $("flow-refresh").addEventListener("click", () => { if (state.flowRunId) loadRun(state.flowRunId, true); });
@@ -2433,6 +2447,30 @@ $("purge-mock").addEventListener("click", () => {
   );
 });
 document.addEventListener("DOMContentLoaded", init);
+
+async function resumeRun(runId) {
+  if (!runId) return;
+  const button = $("resume-run");
+  const flowButton = $("flow-resume-run");
+  button.disabled = true;
+  flowButton.disabled = true;
+  try {
+    const result = await api(`/api/runs/${encodeURIComponent(runId)}/resume`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    toast(`Resuming from ${result.from_stage || "checkpoint"}…`);
+    $("run-status").textContent = "running";
+    $("run-status").className = "status running";
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    await loadRun(runId, true);
+    switchTab("flow");
+  } catch (error) {
+    toast(`Resume error: ${error.message}`, "error");
+    button.disabled = false;
+    flowButton.disabled = false;
+  }
+}
 
 async function stopRun(runId) {
   if (!runId) return;

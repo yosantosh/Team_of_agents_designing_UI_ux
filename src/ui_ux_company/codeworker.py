@@ -33,6 +33,7 @@ class CodeWorker:
         cwd: Path,
         timeout: int,
         env_extra: dict[str, str] | None = None,
+        input_text: str | None = None,
     ) -> tuple[int, str, str]:
         env = dict(os.environ)
         # OpenCode resolves the project from $PWD, not only the OS cwd. Without this
@@ -45,11 +46,15 @@ class CodeWorker:
             *cmd,
             cwd=str(cwd),
             env=env,
+            stdin=asyncio.subprocess.PIPE if input_text is not None else None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            stdout_b, stderr_b = await asyncio.wait_for(
+                proc.communicate(input=input_text.encode("utf-8") if input_text is not None else None),
+                timeout=timeout,
+            )
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
@@ -194,10 +199,12 @@ class CodeWorker:
             "--auto",
             "--format",
             "json",
-            prompt,
         ]
         code, stdout, stderr = await self._run(
-            cmd, worktree, int(getattr(self.settings, "code_worker_timeout", 900))
+            cmd,
+            worktree,
+            int(getattr(self.settings, "code_worker_timeout", 900)),
+            input_text=prompt,
         )
         events: list[dict[str, Any]] = []
         texts: list[str] = []

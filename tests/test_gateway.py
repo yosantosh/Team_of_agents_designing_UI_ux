@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from ui_ux_company.agents import AgentRunner
 from ui_ux_company.config import Settings
@@ -49,3 +50,35 @@ def test_agent_runner_maps_prompt_key(settings):
     )
     assert "constraints" in result.data
     storage.close()
+
+
+def test_gateway_sends_large_prompt_via_stdin(settings, tmp_path):
+    script = tmp_path / "fake-opencode"
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "prompt = sys.stdin.read()\n"
+        "print(json.dumps({'type': 'text', 'part': {'text': json.dumps({'ok': True, 'chars': len(prompt)})}}))\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    settings.opencode_bin = str(script)
+    settings.opencode_cwd = tmp_path
+    registry = load_registry(settings)
+    storage = Storage(settings.storage_db)
+    gateway = ModelGateway(settings, registry, storage)
+    try:
+        result = asyncio.run(
+            gateway.generate(
+                "ia_interaction_designer",
+                "Synthesize flows",
+                {"blob": "x" * 150000},
+                backend="opencode",
+                run_id="run_stdin",
+                task_id="synthesis",
+            )
+        )
+        assert result.data["ok"] is True
+        assert result.data["chars"] > 100000
+    finally:
+        storage.close()

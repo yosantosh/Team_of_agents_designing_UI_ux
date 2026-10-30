@@ -66,6 +66,10 @@ class ModelTestRequest(BaseModel):
     model: str
 
 
+class RunResumeRequest(BaseModel):
+    decision: dict[str, Any] | None = None
+
+
 class DesignContractUpdate(BaseModel):
     contract: dict[str, Any]
 
@@ -749,6 +753,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await task
         return await company.stop(run_id)
 
+    @app.post("/api/runs/{run_id}/resume")
+    async def resume_run(run_id: str, request: RunResumeRequest | None = None):
+        run = storage.get_run(run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="run not found")
+        if run.get("status") not in {"failed", "stopped"}:
+            raise HTTPException(status_code=409, detail=f"run is not resumable from status {run.get('status')}")
+        snapshot = await company.get_state(run_id)
+        if not snapshot.get("next") and not snapshot.get("interrupts"):
+            raise HTTPException(status_code=409, detail="run has no resumable checkpoint")
+        task = _spawn(company.resume_run(run_id, request.decision if request else None))
+        app.state.run_tasks[run_id] = task
+        return {
+            "run_id": run_id,
+            "status": "resuming",
+            "from_stage": ", ".join(snapshot.get("next") or []) or "approval",
+        }
+
     @app.get("/api/runs")
     async def list_runs(limit: int = 50):
         return {"runs": storage.list_runs(limit)}
@@ -802,6 +824,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "artifacts": storage.list_artifacts(run_id),
             "events": storage.list_events(run_id, limit=200),
             "messages": storage.list_agent_messages(run_id, limit=5000),
+            "agent_outputs": storage.list_agent_outputs(run_id, limit=2000),
             "approvals": [
                 _enrich_approval(a)
                 for a in storage.list_approvals(None, 200)

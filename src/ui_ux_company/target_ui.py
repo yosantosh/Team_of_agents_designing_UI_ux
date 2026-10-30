@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from PIL import Image, ImageChops, ImageStat
 
@@ -226,6 +226,7 @@ async def analyze_manifest(
     max_images: int | None = None,
     backend: str | None = None,
     model: str | None = None,
+    on_result: Callable[[str, Any, Any], None] | None = None,
 ) -> TargetManifest:
     if not manifest.images:
         manifest.status = "not_available"
@@ -253,6 +254,11 @@ async def analyze_manifest(
                 backend=backend,
                 model=model,
             )
+            if on_result:
+                try:
+                    on_result("target_ui_analyst", result, image)
+                except Exception:
+                    pass
             data = result.data
             image.extracted = data
             confidence = data.get("confidence")
