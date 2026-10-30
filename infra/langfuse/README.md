@@ -23,6 +23,17 @@ Docker Compose is appropriate for a local machine or a single VM. It is **not**
 high availability and has no built-in backup or scaling. For production, use
 Kubernetes/Helm or a VM with managed Postgres/ClickHouse/S3 and tested backups.
 
+
+## Company dashboard integration
+
+Langfuse runs from the official prebuilt image. The company control room calls
+the Langfuse read API from FastAPI and shows compact trace, session, score,
+dataset, and experiment summaries with deep links into Langfuse. No custom
+Langfuse image is built.
+
+The company dashboard uses the Langfuse visual language: OLED black, white text,
+green icons/active states, and Langfuse-style tables, cards, and tabs.
+
 ## First install
 
 ```bash

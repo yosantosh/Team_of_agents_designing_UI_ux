@@ -8,12 +8,10 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">
-      <div class="mark">◈</div>
-      <div>
-        <h1>UI/UX Agent Company</h1>
-        <p>Dictator Control Room · Native Android social app</p>
-      </div>
+    <div class="topbar-page">
+      <span class="topbar-crumb">Company</span>
+      <span class="topbar-slash">/</span>
+      <strong id="topbar-tab">Overview</strong>
     </div>
     <div class="top-actions">
       <button class="pill clickable" id="budget-pill" title="Click to edit monthly token budget">Budget —</button>
@@ -25,15 +23,21 @@
   </header>
 
   <aside class="rail" id="tabs">
+    <div class="rail-brand"><span class="rail-mark">◈</span><div><b>UI/UX Company</b><small>Control room</small></div></div>
+    <div class="rail-section">Company</div>
     <button class="tab active" data-tab="overview" title="Overview"><span class="rail-icon">◈</span><span class="rail-label">Overview</span></button>
     <button class="tab" data-tab="flow" title="Live Flow"><span class="rail-icon">⌘</span><span class="rail-label">Live Flow</span></button>
     <button class="tab" data-tab="approvals" title="Approvals"><span class="rail-icon">✓</span><span class="rail-label">Approvals</span><span class="count" id="approval-badge">0</span></button>
     <button class="tab" data-tab="artifacts" title="Artifacts"><span class="rail-icon">▤</span><span class="rail-label">Artifacts</span></button>
     <button class="tab" data-tab="contract" title="Design contract"><span class="rail-icon">▦</span><span class="rail-label">Contract</span></button>
-    <button class="tab" data-tab="history" title="Global history"><span class="rail-icon">⟲</span><span class="rail-label">History</span></button>
-    <button class="tab" data-tab="target" title="Target_ui"><span class="rail-icon">◉</span><span class="rail-label">Target_ui</span></button>
+    <button class="tab" data-tab="history" title="Runs and history"><span class="rail-icon">⟲</span><span class="rail-label">Runs &amp; history</span></button>
+    <button class="tab" data-tab="target" title="Target_ui"><span class="rail-icon">◉</span><span class="rail-label">Target_UI</span></button>
     <button class="tab" data-tab="evolution" title="Company Improvement"><span class="rail-icon">✦</span><span class="rail-label">Improvement</span></button>
+    <div class="rail-section">Observability</div>
+    <button class="tab" data-tab="observability" title="Langfuse observability"><span class="rail-icon">◎</span><span class="rail-label">Observability</span></button>
+    <div class="rail-section">System</div>
     <button class="tab" data-tab="settings" title="Settings"><span class="rail-icon">⚙</span><span class="rail-label">Settings</span></button>
+    <div class="rail-foot"><span class="pulse-dot"></span><span id="rail-status">company online</span></div>
   </aside>
 
   <main class="main">
@@ -379,6 +383,50 @@
           <div class="card-head"><h2>Improvement events</h2><span class="tag" id="evolution-event-count">0</span></div>
           <div id="evolution-events" class="timeline scroll tall"></div>
         </div>
+      </div>
+    </section>
+
+    <!-- OBSERVABILITY -->
+    <section id="tab-observability" class="tab-panel">
+      <div class="card obs-header">
+        <div class="card-head">
+          <div>
+            <h2>Observability</h2>
+            <p class="muted">Langfuse is the flight recorder and evaluation lab. Full trace, session, dataset, and experiment views open in Langfuse.</p>
+          </div>
+          <div class="row">
+            <span class="status" id="obs-status">checking</span>
+            <a class="btn primary small" id="obs-open" href="http://127.0.0.1:3000" target="_blank" rel="noopener">Open Langfuse ↗</a>
+            <button class="btn ghost small" id="obs-refresh">Refresh</button>
+          </div>
+        </div>
+        <div id="obs-kpis" class="obs-kpis"></div>
+      </div>
+      <div class="subtabs" id="obs-subtabs">
+        <button class="subtab active" data-obs-tab="traces">Traces</button>
+        <button class="subtab" data-obs-tab="sessions">Sessions</button>
+        <button class="subtab" data-obs-tab="scores">Scores</button>
+        <button class="subtab" data-obs-tab="datasets">Datasets</button>
+        <button class="subtab" data-obs-tab="experiments">Experiments</button>
+      </div>
+      <div id="obs-pane-traces" class="obs-pane active">
+        <div class="card"><div class="card-head"><h2>Recent traces</h2><span class="tag" id="obs-trace-count">0</span></div><div id="obs-traces" class="list scroll tall"></div></div>
+      </div>
+      <div id="obs-pane-sessions" class="obs-pane">
+        <div class="card"><div class="card-head"><h2>Run sessions</h2><span class="tag">session_id = run_id</span></div><div id="obs-sessions" class="list scroll tall"></div></div>
+      </div>
+      <div id="obs-pane-scores" class="obs-pane">
+        <div class="card"><div class="card-head"><h2>Scores</h2><span class="tag" id="obs-score-count">0</span></div><div id="obs-scores" class="list scroll tall"></div></div>
+      </div>
+      <div id="obs-pane-datasets" class="obs-pane">
+        <div class="card"><div class="card-head"><h2>Datasets</h2><span class="tag">golden tasks</span></div><div id="obs-datasets" class="list scroll tall"></div></div>
+      </div>
+      <div id="obs-pane-experiments" class="obs-pane">
+        <div class="card"><div class="card-head"><h2>Experiments</h2><span class="tag">three lanes</span></div><div id="obs-experiments" class="list scroll tall"></div></div>
+      </div>
+      <div class="card obs-detail-card hidden" id="obs-detail-card">
+        <div class="card-head"><h2 id="obs-detail-title">Details</h2><button class="btn ghost small" id="obs-detail-close">×</button></div>
+        <div id="obs-detail" class="artifact-preview"></div>
       </div>
     </section>
 

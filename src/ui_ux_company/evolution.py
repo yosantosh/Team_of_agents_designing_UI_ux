@@ -36,6 +36,8 @@ class EvolutionState(TypedDict, total=False):
     decision: dict[str, Any]
     apply_result: dict[str, Any]
     status: str
+    langfuse_trace_id: str | None
+    langfuse_trace_url: str | None
 
 
 class EvolutionEngine:

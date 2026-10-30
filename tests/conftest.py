@@ -24,5 +24,7 @@ def settings(tmp_path: Path) -> Settings:
     base.langfuse_enabled = False
     base.langfuse_public_key = ""
     base.langfuse_secret_key = ""
+    base.auth_enabled = False
+    base.auth_token = ""
     base.ensure_dirs()
     return base

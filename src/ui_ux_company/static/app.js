@@ -15,6 +15,8 @@ const state = {
   historyFilter: "all",
   appPlan: null,
   langfuse: null,
+  observability: null,
+  obsTab: "traces",
   evalTasks: [],
   evalLanes: {},
   evalExperiments: [],
@@ -157,6 +159,8 @@ function switchTab(name) {
   if (location.hash !== `#${name}`) history.replaceState(null, "", `#${name}`);
   document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.tab === name));
   document.querySelectorAll(".tab-panel").forEach((panel) => panel.classList.toggle("active", panel.id === `tab-${name}`));
+  const activeLabel = document.querySelector(`.tab[data-tab="${name}"] .rail-label`)?.textContent;
+  if ($("topbar-tab")) $("topbar-tab").textContent = activeLabel || name;
   if (name === "flow") {
     renderFlow();
     setTimeout(() => {
@@ -183,6 +187,7 @@ function switchTab(name) {
   }
   if (name === "settings") { renderSettings(); loadAudit(); }
   if (name === "approvals") renderApprovals();
+  if (name === "observability") loadObservability();
 }
 
 // ------------------------------------------------------------------ init
@@ -239,6 +244,7 @@ async function init() {
     await loadModels(false);
     renderAll();
     checkLangfuse(false);
+    loadObservability();
     const initialTab = state.flowFull ? "flow" : location.hash.replace("#", "");
     if (initialTab) switchTab(initialTab);
     const requestedRun = params.get("run");
@@ -324,6 +330,7 @@ function renderAll() {
   renderFlow();
   renderEvolution();
   renderLangfuse();
+  renderObservability();
 }
 
 // ------------------------------------------------------------------ header
@@ -385,6 +392,7 @@ async function checkLangfuse(refresh = true, notify = true) {
   try {
     state.langfuse = await api(`/api/langfuse/health${refresh ? "?refresh=1" : ""}`);
     renderLangfuse();
+    renderHealth();
     renderRuns();
     renderHistory();
     renderRunMeta();
@@ -393,6 +401,242 @@ async function checkLangfuse(refresh = true, notify = true) {
   } catch (error) {
     if (notify) toast(`Langfuse health error: ${error.message}`, "error");
   }
+}
+
+// ------------------------------------------------------------- observability
+function obsBase() {
+  return (state.observability?.base_url || state.langfuse?.base_url || state.health?.langfuse?.base_url || "http://127.0.0.1:3000").replace(/\/$/, "");
+}
+
+function obsProject() {
+  return state.observability?.project_id || state.langfuse?.project_id || state.health?.langfuse?.project_id || "";
+}
+
+function obsTraceUrl(traceId) {
+  if (!traceId) return null;
+  const project = obsProject();
+  return project ? `${obsBase()}/project/${encodeURIComponent(project)}/traces/${encodeURIComponent(traceId)}` : null;
+}
+
+function obsExperimentUrl(experimentId) {
+  if (!experimentId) return null;
+  const project = obsProject();
+  return project ? `${obsBase()}/project/${encodeURIComponent(project)}/experiments/results?baseline=${encodeURIComponent(experimentId)}` : null;
+}
+
+function obsDatasetUrl(datasetId) {
+  if (!datasetId) return null;
+  const project = obsProject();
+  return project ? `${obsBase()}/project/${encodeURIComponent(project)}/datasets/${encodeURIComponent(datasetId)}` : null;
+}
+
+function obsDuration(group) {
+  if (!group.firstStart || !group.lastEnd) return group.latency ? `${group.latency.toFixed(2)}s` : "—";
+  const ms = new Date(group.lastEnd).getTime() - new Date(group.firstStart).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+async function loadObservability() {
+  const status = $("obs-status");
+  if (status) { status.textContent = "checking"; status.className = "status"; }
+  try {
+    const data = await api("/api/observability/overview");
+    state.observability = data;
+    renderObservability();
+  } catch (error) {
+    state.observability = { enabled: false, status: "unavailable", reason: error.message };
+    renderObservability();
+  }
+}
+
+function obsGroupObservations(list, key) {
+  const groups = new Map();
+  for (const item of list || []) {
+    const id = item[key];
+    if (!id) continue;
+    if (!groups.has(id)) {
+      groups.set(id, {
+        id,
+        name: item.traceName || item.name || id,
+        sessionId: item.sessionId,
+        traceId: item.traceId,
+        count: 0,
+        latency: 0,
+        cost: 0,
+        latest: null,
+        firstStart: null,
+        lastEnd: null,
+        spans: [],
+      });
+    }
+    const group = groups.get(id);
+    group.count += 1;
+    group.latency += Number(item.latency || 0);
+    group.cost += Number(item.totalCost || 0);
+    group.latest = item.startTime || group.latest;
+    if (item.startTime && (!group.firstStart || String(item.startTime) < String(group.firstStart))) group.firstStart = item.startTime;
+    if (item.endTime && (!group.lastEnd || String(item.endTime) > String(group.lastEnd))) group.lastEnd = item.endTime;
+    group.spans.push(item);
+  }
+  return Array.from(groups.values()).sort((a, b) => String(b.latest || "").localeCompare(String(a.latest || "")));
+}
+
+function renderObservability() {
+  const data = state.observability;
+  const status = $("obs-status");
+  const open = $("obs-open");
+  if (!status || !$("obs-kpis")) return;
+  const connected = data?.enabled === true && data?.status !== "unavailable";
+  status.textContent = connected ? "connected" : (data?.status || "unavailable");
+  status.className = `status ${connected ? "completed" : "failed"}`;
+  if (open) open.href = obsBase();
+  const kpis = [
+    ["Traces", data?.trace_count ?? 0],
+    ["Sessions", data?.session_count ?? 0],
+    ["Scores", data?.score_count ?? 0],
+    ["Datasets", data?.dataset_count ?? 0],
+    ["Experiments", data?.experiment_count ?? 0],
+  ];
+  $("obs-kpis").innerHTML = kpis.map(([label, value]) => `
+    <div class="obs-kpi"><div class="label">${escapeHtml(label)}</div><div class="value ${connected ? "green" : ""}">${escapeHtml(value)}</div></div>
+  `).join("");
+  const observations = data?.recent_observations || [];
+  const scores = data?.recent_scores || [];
+  const traces = obsGroupObservations(observations, "traceId");
+  const sessions = obsGroupObservations(observations, "sessionId");
+  $("obs-trace-count").textContent = String(traces.length);
+  $("obs-score-count").textContent = String(scores.length);
+  if ($("obs-traces")) {
+    $("obs-traces").innerHTML = !connected
+      ? `<div class="muted">Langfuse unavailable: ${escapeHtml(data?.reason || "not configured")}</div>`
+      : traces.length ? traces.slice(0, 60).map((trace) => `
+        <div class="item clickable" data-obs-kind="trace" data-obs-id="${escapeHtml(trace.id)}">
+          <div class="obs-row">
+            <div><div class="name">${escapeHtml(short(trace.name, 80))}</div><div class="sub">${escapeHtml(trace.id)}</div></div>
+            <div class="metric"><b>${trace.count}</b> spans</div>
+            <div class="metric">${obsDuration(trace)}</div>
+            <div class="metric">${trace.cost ? `$${trace.cost.toFixed(4)}` : "—"}</div>
+          </div>
+        </div>
+      `).join("") : `<div class="muted">No traces yet. Run the company to create one.</div>`;
+  }
+  if ($("obs-sessions")) {
+    $("obs-sessions").innerHTML = !connected
+      ? `<div class="muted">Langfuse unavailable.</div>`
+      : sessions.length ? sessions.slice(0, 60).map((session) => `
+        <div class="item clickable" data-obs-kind="session" data-obs-id="${escapeHtml(session.id)}">
+          <div class="obs-row">
+            <div><div class="name">${escapeHtml(short(session.id, 70))}</div><div class="sub">${escapeHtml(session.name)}</div></div>
+            <div class="metric"><b>${session.count}</b> spans</div>
+            <div class="metric">${obsDuration(session)}</div>
+            <div class="metric">${session.cost ? `$${session.cost.toFixed(4)}` : "—"}</div>
+          </div>
+        </div>
+      `).join("") : `<div class="muted">No sessions yet.</div>`;
+  }
+  if ($("obs-scores")) {
+    $("obs-scores").innerHTML = !connected
+      ? `<div class="muted">Langfuse unavailable.</div>`
+      : scores.length ? scores.slice(0, 80).map((score, index) => `
+        <div class="item clickable" data-obs-kind="score" data-obs-index="${index}">
+          <div class="obs-row">
+            <div><div class="name">${escapeHtml(score.name)}</div><div class="sub">${escapeHtml(score.traceId || score.subject?.id || "trace")}</div></div>
+            <div class="metric"><b>${escapeHtml(score.value)}</b></div>
+            <div class="metric">${escapeHtml(score.dataType)}</div>
+            <div class="metric">${escapeHtml(fmtTime(score.timestamp))}</div>
+          </div>
+        </div>
+      `).join("") : `<div class="muted">No scores yet.</div>`;
+  }
+  if ($("obs-datasets")) {
+    const datasets = data?.datasets || [];
+    $("obs-datasets").innerHTML = !connected
+      ? `<div class="muted">Langfuse unavailable.</div>`
+      : datasets.length ? datasets.map((dataset) => `
+        <div class="item clickable" data-obs-kind="dataset" data-obs-id="${escapeHtml(dataset.name)}">
+          <div class="obs-row">
+            <div><div class="name">${escapeHtml(dataset.name)}</div><div class="sub">${escapeHtml(dataset.description || dataset.id)}</div></div>
+            <div class="metric">${escapeHtml(dataset.id)}</div>
+            <div class="metric">${escapeHtml(fmtTime(dataset.createdAt))}</div>
+            <div class="metric">${obsDatasetUrl(dataset.id) ? `<a href="${escapeHtml(obsDatasetUrl(dataset.id))}" target="_blank" rel="noopener">Open ↗</a>` : ""}</div>
+          </div>
+        </div>
+      `).join("") : `<div class="muted">No datasets yet.</div>`;
+  }
+  if ($("obs-experiments")) {
+    const experiments = data?.experiments || [];
+    $("obs-experiments").innerHTML = !connected
+      ? `<div class="muted">Langfuse unavailable.</div>`
+      : experiments.length ? experiments.map((experiment) => `
+        <div class="item clickable" data-obs-kind="experiment" data-obs-id="${escapeHtml(experiment.id)}">
+          <div class="obs-row">
+            <div><div class="name">${escapeHtml(short(experiment.name, 90))}</div><div class="sub">${escapeHtml(experiment.id)}</div></div>
+            <div class="metric"><b>${escapeHtml(experiment.itemCount ?? 0)}</b> items</div>
+            <div class="metric">${escapeHtml(fmtTime(experiment.startTime))}</div>
+            <div class="metric">${obsExperimentUrl(experiment.id) ? `<a href="${escapeHtml(obsExperimentUrl(experiment.id))}" target="_blank" rel="noopener">Open ↗</a>` : ""}</div>
+          </div>
+        </div>
+      `).join("") : `<div class="muted">No experiments yet.</div>`;
+  }
+}
+
+async function openObsDetail(kind, id) {
+  const data = state.observability || {};
+  let title = "Observability detail";
+  let sub = id;
+  let body = "";
+  let actions = `<button class="btn ghost" data-close-modal>Close</button>`;
+  if (kind === "trace") {
+    const observations = data.recent_observations || [];
+    const spans = observations.filter((item) => item.traceId === id);
+    const url = obsTraceUrl(id);
+    title = spans[0]?.traceName || "Trace";
+    body = `<pre>${escapeHtml(JSON.stringify({ traceId: id, observations: spans }, null, 2))}</pre>`;
+    if (url) actions = `<a class="btn primary" href="${escapeHtml(url)}" target="_blank" rel="noopener">Open trace in Langfuse ↗</a>` + actions;
+  } else if (kind === "session") {
+    const observations = (data.recent_observations || []).filter((item) => item.sessionId === id);
+    title = `Session ${id}`;
+    body = `<pre>${escapeHtml(JSON.stringify(observations, null, 2))}</pre>`;
+  } else if (kind === "score") {
+    const score = (data.recent_scores || [])[Number(id)];
+    title = score?.name || "Score";
+    body = `<pre>${escapeHtml(JSON.stringify(score, null, 2))}</pre>`;
+    const url = obsTraceUrl(score?.traceId);
+    if (url) actions = `<a class="btn primary" href="${escapeHtml(url)}" target="_blank" rel="noopener">Open trace in Langfuse ↗</a>` + actions;
+  } else if (kind === "dataset") {
+    title = id;
+    body = `<div class="muted">Loading dataset…</div>`;
+    openModal(title, sub, body, actions);
+    try {
+      const dataset = await api(`/api/observability/datasets/${encodeURIComponent(id)}`);
+      $("obs-detail")?.remove();
+      const modal = $("modal");
+      const pre = document.createElement("pre");
+      pre.id = "obs-detail";
+      pre.textContent = JSON.stringify(dataset, null, 2);
+      modal?.querySelector(".modal-card")?.insertBefore(pre, modal.querySelector(".modal-actions"));
+    } catch (error) {
+      const modal = $("modal");
+      modal?.querySelector(".modal-actions")?.insertAdjacentHTML("beforebegin", `<pre id="obs-detail">${escapeHtml(error.message)}</pre>`);
+    }
+    return;
+  } else if (kind === "experiment") {
+    title = id;
+    body = `<div class="muted">Loading experiment…</div>`;
+    openModal(title, sub, body, actions);
+    try {
+      const items = await api(`/api/observability/experiments/${encodeURIComponent(id)}/items`);
+      const modal = $("modal");
+      modal?.querySelector(".modal-actions")?.insertAdjacentHTML("beforebegin", `<pre id="obs-detail">${escapeHtml(JSON.stringify(items, null, 2))}</pre>`);
+    } catch (error) {
+      const modal = $("modal");
+      modal?.querySelector(".modal-actions")?.insertAdjacentHTML("beforebegin", `<pre id="obs-detail">${escapeHtml(error.message)}</pre>`);
+    }
+    return;
+  }
+  openModal(title, sub, body, actions);
 }
 
 function renderBudget() {
@@ -2563,6 +2807,25 @@ function closeModal() {
 $("tabs").addEventListener("click", (event) => {
   const tab = event.target.closest(".tab");
   if (tab) switchTab(tab.dataset.tab);
+});
+function switchObsTab(name) {
+  state.obsTab = name;
+  document.querySelectorAll("[data-obs-tab]").forEach((button) => button.classList.toggle("active", button.dataset.obsTab === name));
+  document.querySelectorAll(".obs-pane").forEach((pane) => pane.classList.toggle("active", pane.id === `obs-pane-${name}`));
+}
+$("obs-subtabs").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-obs-tab]");
+  if (button) switchObsTab(button.dataset.obsTab);
+});
+$("obs-refresh").addEventListener("click", () => { loadObservability(); checkLangfuse(true, false); });
+$("obs-detail-close").addEventListener("click", () => $("obs-detail-card").classList.add("hidden"));
+["obs-traces", "obs-sessions", "obs-scores", "obs-datasets", "obs-experiments"].forEach((id) => {
+  $(id)?.addEventListener("click", (event) => {
+    if (event.target.closest("a")) return;
+    const item = event.target.closest("[data-obs-kind]");
+    if (!item) return;
+    openObsDetail(item.dataset.obsKind, item.dataset.obsId || item.dataset.obsIndex);
+  });
 });
 $("history-filters").addEventListener("click", (event) => {
   const button = event.target.closest("[data-history-filter]");

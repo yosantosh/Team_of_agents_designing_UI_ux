@@ -64,6 +64,9 @@ def test_api_health_and_registry(settings):
         langfuse = client.get("/api/langfuse/health")
         assert langfuse.status_code == 200
         assert langfuse.json()["status"] == "disabled"
+        observability = client.get("/api/observability/overview")
+        assert observability.status_code == 200
+        assert observability.json()["status"] == "unavailable"
         root = client.get("/")
         assert root.status_code == 200
         flow = client.get("/flow")

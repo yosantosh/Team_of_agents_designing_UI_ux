@@ -29,6 +29,7 @@ from .graph import CompanyGraph
 from .langfuse_trace import LangfuseTracer
 from .models import ApprovalDecision, EvolutionRequest, RunRequest, new_id
 from .notifications import Notifier
+from .observability import ObservabilityService
 from .project_validation import validate_android_project
 from .registry import list_projects, load_budget, load_profile, load_registry, load_yaml
 from .rollback import RollbackError, RollbackService
@@ -126,6 +127,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     artifacts = ArtifactStore(settings, storage)
     rollback_service = RollbackService(settings, storage, artifacts)
     tracer = LangfuseTracer(settings)
+    observability = ObservabilityService(tracer)
     gateway = ModelGateway(settings, registry, storage)
     agents = AgentRunner(gateway, registry, tracer=tracer)
     company = CompanyGraph(
@@ -186,6 +188,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.company = company
     app.state.evolution = evolution
     app.state.tracer = tracer
+    app.state.observability = observability
     app.state.tasks = set()
     app.state.run_tasks: dict[str, asyncio.Task] = {}
     app.state.evolution_tasks: dict[str, asyncio.Task] = {}
@@ -292,6 +295,60 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/langfuse/check")
     async def langfuse_check():
         return await asyncio.to_thread(tracer.health)
+
+    @app.get("/api/observability/health")
+    async def observability_health():
+        return await asyncio.to_thread(observability.health)
+
+    @app.get("/api/observability/overview")
+    async def observability_overview():
+        return await asyncio.to_thread(observability.overview)
+
+    @app.get("/api/observability/observations")
+    async def observability_observations(
+        session_id: str | None = None,
+        trace_id: str | None = None,
+        name: str | None = None,
+        limit: int = 50,
+    ):
+        return await asyncio.to_thread(
+            observability.observations,
+            session_id=session_id,
+            trace_id=trace_id,
+            name=name,
+            limit=limit,
+        )
+
+    @app.get("/api/observability/scores")
+    async def observability_scores(
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        name: str | None = None,
+        limit: int = 100,
+    ):
+        return await asyncio.to_thread(
+            observability.scores,
+            trace_id=trace_id,
+            session_id=session_id,
+            name=name,
+            limit=limit,
+        )
+
+    @app.get("/api/observability/datasets")
+    async def observability_datasets(limit: int = 50):
+        return await asyncio.to_thread(observability.datasets, limit)
+
+    @app.get("/api/observability/datasets/{name}")
+    async def observability_dataset(name: str):
+        return await asyncio.to_thread(observability.dataset, name)
+
+    @app.get("/api/observability/experiments")
+    async def observability_experiments(limit: int = 50, days: int = 90):
+        return await asyncio.to_thread(observability.experiments, limit, days)
+
+    @app.get("/api/observability/experiments/{experiment_id}/items")
+    async def observability_experiment_items(experiment_id: str, limit: int = 100):
+        return await asyncio.to_thread(observability.experiment_items, experiment_id, limit)
 
     @app.post("/api/auth/login")
     async def auth_login(request: AuthLogin):
@@ -1000,7 +1057,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="run not found")
         state = await company.get_state(run_id)
         _with_trace(run.get("state"))
-        _with_trace((state or {}).get("values") if isinstance(state, dict) else None)
+        values = (state or {}).get("values") if isinstance(state, dict) else None
+        _with_trace(values)
+        if isinstance(values, dict) and isinstance(run.get("state"), dict):
+            for key in ("langfuse_trace_id", "langfuse_trace_url"):
+                if not values.get(key) and run["state"].get(key):
+                    values[key] = run["state"][key]
         return {
             "run": run,
             "state": state,

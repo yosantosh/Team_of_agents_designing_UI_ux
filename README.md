@@ -69,6 +69,18 @@ exports datasets, experiments, evaluators, and aggregate scores to Langfuse. If
 Langfuse is disabled or down, the company continues and local SQLite results remain
 authoritative. Full setup, backup, and offline notes: [`infra/langfuse/README.md`](infra/langfuse/README.md).
 
+
+### Observability hub
+
+Langfuse runs from the official prebuilt Docker image; the custom image build
+was removed because this host is too small for a full Next.js build. The company
+dashboard has its own **Observability** section that reads Langfuse traces,
+sessions, scores, datasets, and experiments through the company API, then deep
+links into the full Langfuse UI.
+
+The dashboard keeps the Langfuse visual language: OLED black, white text, green
+icons and active states, Langfuse-style tables, cards, and tabs.
+
 ## What is in the box
 
 ```
@@ -368,6 +380,8 @@ SSE: `GET /api/runs/{run_id}/events`
 Approvals: `GET /api/approvals`, `POST /api/approvals/{id}/decide`
 
 Company improvement: `POST /api/evolve`, `GET /api/evolve`, `POST /api/evolve/{id}/approve`
+
+Observability: `GET /api/observability/overview`, `/observations`, `/scores`, `/datasets`, `/datasets/{name}`, `/experiments`, `/experiments/{id}/items`
 
 ---
 

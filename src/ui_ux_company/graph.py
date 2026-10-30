@@ -73,6 +73,8 @@ class CompanyState(TypedDict, total=False):
     errors: list[str]
     status: str
     approval_id: str | None
+    langfuse_trace_id: str | None
+    langfuse_trace_url: str | None
 
 
 
