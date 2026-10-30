@@ -758,9 +758,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         run = storage.get_run(run_id)
         if not run:
             raise HTTPException(status_code=404, detail="run not found")
-        if run.get("status") not in {"failed", "stopped"}:
-            raise HTTPException(status_code=409, detail=f"run is not resumable from status {run.get('status')}")
+        status_value = run.get("status")
+        if status_value not in {"failed", "stopped", "escalated"}:
+            raise HTTPException(status_code=409, detail=f"run is not resumable from status {status_value}")
         snapshot = await company.get_state(run_id)
+        if status_value == "escalated":
+            values = snapshot.get("values") or {}
+            design_stage = (
+                values.get("critique_gate") == "escalate"
+                or values.get("status") in {"critique", "human_gate", "awaiting_design_approval"}
+            ) and not values.get("implementation")
+            if not design_stage:
+                raise HTTPException(status_code=409, detail="escalation is not at the design gate; no safe continuation path")
+            task = _spawn(company.resume_escalated(run_id, request.decision if request else {"decision": "override"}))
+            app.state.run_tasks[run_id] = task
+            return {"run_id": run_id, "status": "resuming", "from_stage": "escalation"}
         if not snapshot.get("next") and not snapshot.get("interrupts"):
             raise HTTPException(status_code=409, detail="run has no resumable checkpoint")
         task = _spawn(company.resume_run(run_id, request.decision if request else None))
@@ -949,10 +961,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
             return {"status": "decided", "approval_id": approval_id, "decision": payload, "reason": reason}
 
-        # An escalation approval is created after the run has already stopped. There is
-        # no graph interrupt to resume; the decision itself is the durable outcome.
+        # An escalation approval is terminal in the graph. On approve/override,
+        # convert it into a synthetic human-gate override and continue the pipeline.
         if gate == "dictator_escalation":
-            return await finalize_locally("escalation run is already terminal")
+            final = await finalize_locally("escalation decision recorded")
+            run = storage.get_run(run_id) if run_id else None
+            if run and run.get("status") == "escalated":
+                snapshot = await company.get_state(run_id)
+                values = snapshot.get("values") or {}
+                design_stage = (
+                    values.get("critique_gate") == "escalate"
+                    or values.get("status") in {"critique", "human_gate", "awaiting_design_approval"}
+                ) and not values.get("implementation")
+                if design_stage:
+                    _spawn(company.resume_escalated(run_id, {**payload, "approval_id": approval_id}))
+                    return {"status": "resuming", "approval_id": approval_id, "decision": payload}
+            return final
 
         if not run_id:
             return await finalize_locally("approval has no resumable run")

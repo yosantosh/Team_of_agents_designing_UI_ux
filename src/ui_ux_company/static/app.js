@@ -413,16 +413,22 @@ function renderRunMeta() {
     $("run-meta").textContent = "No run selected. Issue a decree to begin.";
     $("stop-run").disabled = true;
     $("flow-stop-run").disabled = true;
-    $("resume-run").disabled = true;
-    $("flow-resume-run").disabled = true;
+    if ($("resume-run")) $("resume-run").disabled = true;
+    if ($("flow-resume-run")) $("flow-resume-run").disabled = true;
     return;
   }
   const terminal = ["completed", "failed", "stopped", "escalated"].includes(run.status);
-  const resumable = ["failed", "stopped"].includes(run.status) && Boolean((state.runState?.next || []).length);
+  const resumeValues = state.runState?.values || {};
+  const designEscalation = run.status === "escalated"
+    && (resumeValues.critique_gate === "escalate"
+      || ["critique", "human_gate", "awaiting_design_approval"].includes(resumeValues.status))
+    && !resumeValues.implementation;
+  const resumable = (["failed", "stopped"].includes(run.status) && Boolean((state.runState?.next || []).length))
+    || designEscalation;
   $("stop-run").disabled = terminal;
   $("flow-stop-run").disabled = terminal;
-  $("resume-run").disabled = !resumable;
-  $("flow-resume-run").disabled = !resumable;
+  if ($("resume-run")) $("resume-run").disabled = !resumable;
+  if ($("flow-resume-run")) $("flow-resume-run").disabled = !resumable;
   const values = state.runState?.values || {};
   $("run-status").textContent = run.status;
   $("run-status").className = `status ${statusClass(run.status)}`;
@@ -1189,7 +1195,7 @@ function approvalCard(approval, compact = false) {
         ${overdue ? `<span class="badge failed">overdue</span>` : ""}
       </div>
       <div class="approval-summary">${escapeHtml(approval.summary || short(approval.message || approval.title || "", compact ? 180 : 260))}</div>
-      <details class="approval-details">
+      <details class="approval-details" data-approval-id="${escapeHtml(approval.approval_id)}">
         <summary>Show details</summary>
         <div class="details-body">${escapeHtml(approval.details || approval.message || "No extra details recorded.")}</div>
       </details>
@@ -1225,6 +1231,9 @@ function renderApprovals() {
   $("pending-approvals-tag").textContent = String(pending.length);
   $("history-approvals-count").textContent = String(historyAll.length);
   $("history-approvals-tag").textContent = String(historyAll.length);
+  const openDetailIds = new Set(
+    Array.from(document.querySelectorAll(".approval-details[open]")).map((el) => el.dataset.approvalId)
+  );
   const quick = $("approvals-quick");
   const pendingEl = $("approvals-pending");
   const historyEl = $("approvals-history");
@@ -1247,12 +1256,15 @@ function renderApprovals() {
         ${a.decision?.notes ? `<span>${escapeHtml(short(a.decision.notes, 80))}</span>` : ""}
       </div>
       <div class="approval-summary">${escapeHtml(a.summary || short(a.message || a.title || "", 240))}</div>
-      <details class="approval-details">
+      <details class="approval-details" data-approval-id="${escapeHtml(a.approval_id)}">
         <summary>Show details</summary>
         <div class="details-body">${escapeHtml(a.details || a.message || "No extra details recorded.")}</div>
       </details>
     </div>
   `).join("") : `<div class="muted">No decisions recorded yet.</div>`;
+  document.querySelectorAll(".approval-details").forEach((el) => {
+    if (openDetailIds.has(el.dataset.approvalId)) el.open = true;
+  });
   document.querySelectorAll("[data-approval]").forEach((button) => {
     button.addEventListener("click", () => {
       if (button.dataset.decision === "dictate") openDictate(button.dataset.approval);
@@ -1291,19 +1303,23 @@ async function decideApproval(approvalId, decision, notes = "") {
 
 function openDictate(approvalId) {
   const body = `
-    <p class="muted">Write the Dictator's exact answer. It is recorded with the approval and, where the graph supports it, passed back as an override.</p>
-    <textarea id="dictate-text" placeholder="e.g. Keep the profile top bar to Settings + Share only. Move QR into the overflow menu."></textarea>
+    <p class="muted">Write the Dictator's exact instruction. This is recorded with the decision and fed back into the run.</p>
+    <textarea id="dictate-text" placeholder="e.g. Use a simpler layout, keep the current top bar, and fix the contrast before trying again."></textarea>
+    <p class="hint">Approve continues with your instruction. Decline asks for another design pass. On a major one-way-door decision, declining without instructions will halt the run.</p>
   `;
-  openModal("Dictate your answer", "Approve, reject, or write your own decision.", body, `
+  openModal("Dictate your answer", "Approve with instructions, or decline and ask for another pass.", body, `
     <button class="btn ghost" data-close-modal>Cancel</button>
-    <button class="btn primary" id="send-dictate">Send dictate</button>
+    <button class="btn danger" id="send-dictate-decline">Decline + instructions</button>
+    <button class="btn primary" id="send-dictate-approve">Approve + instructions</button>
   `, (modal) => {
-    modal.querySelector("#send-dictate").addEventListener("click", async () => {
+    const send = async (decision) => {
       const text = modal.querySelector("#dictate-text").value.trim();
       if (!text) { toast("Write a dictate first.", "error"); return; }
       closeModal();
-      await decideApproval(approvalId, "override", text);
-    });
+      await decideApproval(approvalId, decision, text);
+    };
+    modal.querySelector("#send-dictate-decline").addEventListener("click", () => send("reject"));
+    modal.querySelector("#send-dictate-approve").addEventListener("click", () => send("override"));
   });
 }
 
@@ -2246,8 +2262,8 @@ $("approval-subtabs").addEventListener("click", (event) => {
 $("open-flow").addEventListener("click", () => openFullFlow());
 $("stop-run").addEventListener("click", () => stopRun(state.runId));
 $("flow-stop-run").addEventListener("click", () => stopRun(state.flowRunId || state.runId));
-$("resume-run").addEventListener("click", () => resumeRun(state.runId));
-$("flow-resume-run").addEventListener("click", () => resumeRun(state.flowRunId || state.runId));
+$("resume-run")?.addEventListener("click", () => resumeRun(state.runId));
+$("flow-resume-run")?.addEventListener("click", () => resumeRun(state.flowRunId || state.runId));
 $("open-evolution").addEventListener("click", () => switchTab("evolution"));
 $("flow-run-select").addEventListener("change", (event) => { loadRun(event.target.value, true); });
 $("flow-refresh").addEventListener("click", () => { if (state.flowRunId) loadRun(state.flowRunId, true); });

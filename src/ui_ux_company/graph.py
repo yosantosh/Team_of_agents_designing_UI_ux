@@ -1011,13 +1011,20 @@ class CompanyGraph:
         screen_spec = state.get("screen_spec", {})
         title = "Approve the design direction"
         score = critique.get("score", "n/a")
-        summary = (
-            f"The critic scored the design {score}. "
-            "It is ready for your decision; approving lets the company start implementation."
-        )
-        details = (
-            f"{screen_spec.get('goal', 'Design ready for approval.')}\n\n"
-            + self._critique_detail(critique)
+        summary = "The design review passed. Approving lets the team start implementation."
+        details = "\n".join(
+            [
+                "What happened:",
+                "- The design package is ready.",
+                "- The independent critic found no blocking issues.",
+                "",
+                "What you can do:",
+                "- Approve: start implementation.",
+                "- Reject: send the design back for another pass.",
+                "- Override: proceed with your own recorded instruction.",
+                "",
+                f"Reviewer score: {score}/1 (reference only).",
+            ]
         )
         message = summary
         options = [
@@ -1575,53 +1582,79 @@ class CompanyGraph:
 
     async def _escalate(self, state: CompanyState) -> dict[str, Any]:
         self._set_status(state, "escalated")
-        critique = state.get("critique", {})
-        qa = state.get("qa", {})
+        critique = state.get("critique") or {}
+        qa = state.get("qa") or {}
+        code_edits = (state.get("implementation") or {}).get("code_edits") or {}
+        critical = [
+            issue for issue in (critique.get("issues") or [])
+            if str(issue.get("severity") or "").lower() == "critical"
+        ]
+        conflicts = (state.get("design_contract") or {}).get("conflicts_remaining") or []
+        one_way_door = bool(
+            (critique.get("escalation") or {}).get("one_way_door")
+            or len(critical) >= 4
+            or len(conflicts) >= 3
+        )
+        happened: list[str] = []
+        why: list[str] = []
         reason = "Work did not pass the required gates within the rework limit, or the Dictator rejected the design."
-        summary = "The company stopped at a gate and needs your decision. Open details for the short reason and the options."
         if critique.get("verdict") == "ESCALATE":
             reason = "The independent critic escalated a design decision."
-            critical = [
-                issue for issue in (critique.get("issues") or []) if issue.get("severity") == "critical"
-            ]
+            happened.append("The design review stopped the run before any code was changed.")
+            why.append(f"{len(critical)} serious design problem(s) still need a decision.")
+            for index, issue in enumerate(critical[:6], 1):
+                area = str(issue.get("area") or "Design").replace("_", " ")
+                problem = self._clip(issue.get("problem"), 260)
+                fix = self._clip(issue.get("fix"), 220)
+                why.append(f"{index}. {area}: {problem} Fix: {fix}")
             summary = (
-                "The design critic found blockers, so code did not start. "
-                f"{len(critical)} critical issue(s) need a decision or a rework."
+                f"The design was stopped before coding: {len(critical)} serious problem(s) remain. "
+                "You can approve anyway, ask for another design pass, or stop."
             )
-        code_edits = (state.get("implementation") or {}).get("code_edits") or {}
-        if code_edits.get("status") in {"failed", "no_changes", "disabled"}:
+        elif code_edits.get("status") in {"failed", "no_changes", "disabled"}:
             reason = (
                 f"Code worker {code_edits.get('status')}: "
                 f"{code_edits.get('reason') or 'no reviewable code patch was produced'}"
             )
+            happened.append("The code worker could not produce a safe, reviewable code change.")
+            why.append(self._clip(code_edits.get("reason") or "No reviewable patch was produced.", 500))
             summary = (
-                "The code worker could not produce a reviewable code change, so I stopped the run. "
-                "Open details for the reason and the next options."
+                "Coding stopped before QA because the code worker could not make a safe change. "
+                "Open details for the reason and your options."
             )
-        if qa.get("gate") == "not_run":
+        elif qa.get("gate") == "not_run":
             reason = "QA evidence is missing; production release is blocked until real screenshots and test evidence exist."
+            happened.append("QA has no real screenshots or test evidence.")
+            why.append("The release cannot be verified without real device evidence.")
             summary = (
-                "QA has no real screenshots or tests yet, so release is blocked. "
+                "QA is missing real screenshots or tests, so release is blocked. "
                 "Open details to see what evidence is missing."
             )
-        details_parts = [reason]
-        if critique:
-            details_parts.append("")
-            details_parts.append(self._critique_detail(critique))
-        if qa:
-            details_parts.append("")
-            details_parts.append(
-                f"QA gate: {qa.get('gate', 'n/a')}. "
-                f"Visual: {qa.get('visual', {}).get('status', 'n/a') if isinstance(qa.get('visual'), dict) else qa.get('visual', 'n/a')}. "
-                f"Functional/a11y: {qa.get('functional', {}).get('status', 'n/a') if isinstance(qa.get('functional'), dict) else qa.get('functional', 'n/a')}."
+        else:
+            happened.append("The company stopped at a required gate.")
+            why.append(self._clip(reason, 500))
+
+        details_lines = ["What happened:", *[f"- {item}" for item in happened], "", "Why:"]
+        details_lines.extend(f"- {item}" for item in why)
+        details_lines.extend(
+            [
+                "",
+                "What you can do:",
+                "- Approve anyway: continue with a recorded override.",
+                "- Ask for another design pass: the team fixes the issues and returns.",
+                "- Stop this change: keep the current app unchanged.",
+            ]
+        )
+        if qa.get("gate") == "not_run":
+            details_lines.insert(-3, "- Upload screenshots, then re-run QA.")
+        if one_way_door:
+            details_lines.extend(
+                [
+                    "",
+                    "This is a major one-way-door decision. If you decline without instructions, the run will halt.",
+                ]
             )
-        if code_edits:
-            details_parts.append("")
-            details_parts.append(
-                f"Code worker status: {code_edits.get('status')}. "
-                f"Changed files: {', '.join(code_edits.get('changed_files') or []) or 'none'}."
-            )
-        details = "\n".join(details_parts)
+        details = "\n".join(details_lines)
         options = [
             {"option_id": "force", "label": "Dictator override and continue", "impact": "Proceed with a recorded override; safety and release risks remain owned by the Dictator."},
             {"option_id": "rework", "label": "Approve another rework cycle", "impact": "Reset the relevant rework counter and try again."},
@@ -1645,6 +1678,7 @@ class CompanyGraph:
             "reason": reason,
             "summary": summary,
             "details": details,
+            "halt_on_decline": one_way_door,
             "critique": critique,
             "qa_gate": qa.get("gate"),
             "options": options,
@@ -1661,6 +1695,7 @@ class CompanyGraph:
                 "gate": "dictator_escalation",
                 "summary": summary,
                 "details": details,
+                "halt_on_decline": one_way_door,
                 "reason": reason,
                 "options": options,
             },
@@ -1670,7 +1705,7 @@ class CompanyGraph:
             "chief_orchestrator",
             "dictator",
             "escalation",
-            did="Escalating a one-way-door decision",
+            did="Escalating a one-way-door decision" if one_way_door else "Escalating a design decision",
             doing="Waiting for the Dictator",
             needs=summary,
             artifact="escalation.json",
@@ -1995,6 +2030,146 @@ class CompanyGraph:
                 status="failed",
                 state={**resumed_state, "status": "failed", "error": error},
             )
+            await self.bus.publish(run_id, "run.failed", str(exc), "chief_orchestrator", error)
+            return {"status": "failed", "error": error}
+
+    def _is_crisis_escalation(self, values: dict[str, Any]) -> bool:
+        critique = values.get("critique") or {}
+        critical = [
+            issue for issue in (critique.get("issues") or [])
+            if str(issue.get("severity") or "").lower() == "critical"
+        ]
+        conflicts = (values.get("design_contract") or {}).get("conflicts_remaining") or []
+        return bool(
+            (critique.get("escalation") or {}).get("one_way_door")
+            or len(critical) >= 4
+            or len(conflicts) >= 3
+        )
+
+    async def resume_escalated(self, run_id: str, decision: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Continue an escalated design run according to the Dictator's decision.
+
+        Approve/override/dictate -> continue with a recorded override.
+        Decline with a rework instruction -> run another design pass.
+        Decline without instructions on a very major decision -> halt.
+        """
+        await self._ensure_graph()
+        run = self.storage.get_run(run_id)
+        if not run:
+            raise ValueError("run not found")
+        if run.get("status") != "escalated":
+            raise ValueError(f"run is not an escalated run: {run.get('status')}")
+        payload = decision or {"decision": "override"}
+        decision_kind = str(payload.get("decision") or "")
+        if decision_kind not in {"approve", "override", "force", "reject"}:
+            raise ValueError("escalation requires approve, override, force, or reject")
+        snapshot = await self.graph.aget_state(self._config(run_id))
+        values = dict(snapshot.values or {})
+        design_stage = (
+            values.get("critique_gate") == "escalate"
+            or values.get("status") in {"critique", "human_gate", "awaiting_design_approval"}
+        ) and not values.get("implementation")
+        if not design_stage:
+            raise ValueError("only design-stage escalations can be continued safely")
+        notes = str(payload.get("notes") or "").strip()
+
+        if decision_kind == "reject":
+            if self._is_crisis_escalation(values) and not notes:
+                reason = (
+                    "The Dictator declined a major one-way-door decision without a dictate. "
+                    "The run was halted to avoid continuing with unresolved intent."
+                )
+                values.update(
+                    {
+                        "status": "stopped",
+                        "stopped_reason": reason,
+                        "human_decision": {
+                            "decision": "reject",
+                            "notes": notes or "Declined without a dictate.",
+                            "source": "dictator_escalation",
+                            "approval_id": payload.get("approval_id"),
+                        },
+                    }
+                )
+                self.storage.update_run(run_id, status="stopped", state=values)
+                self.artifacts.write_json(run_id, "escalation_decision.json", values["human_decision"], created_by="dictator")
+                await self.bus.publish(run_id, "run.stopped", reason, "dictator", {"reason": reason, "halt_on_decline": True})
+                return {"status": "stopped", "reason": reason}
+            critique = dict(values.get("critique") or {})
+            instructions = list(critique.get("rework_instructions") or [])
+            instructions.append(notes or "Dictator declined this design; run another design pass with safer constraints.")
+            critique["rework_instructions"] = instructions
+            counts = dict(values.get("rework_counts") or {})
+            counts["design"] = int(counts.get("design", 0)) + 1
+            values.update(
+                {
+                    "critique": critique,
+                    "critique_gate": "needs_rework",
+                    "design_approved": False,
+                    "human_decision": {
+                        "decision": "reject",
+                        "notes": notes or "Declined; rework requested.",
+                        "source": "dictator_escalation",
+                        "approval_id": payload.get("approval_id"),
+                    },
+                    "rework_counts": counts,
+                    "status": "critique",
+                }
+            )
+            as_node = "critique"
+            message = "Escalation declined; another design pass requested"
+        else:
+            human_decision = {
+                "decision": "override",
+                "notes": notes or "Dictator approved the escalated design gate.",
+                "source": "dictator_escalation",
+                "approval_id": payload.get("approval_id"),
+            }
+            values.update(
+                {
+                    "critique_gate": "pass",
+                    "design_approved": True,
+                    "human_decision": human_decision,
+                    "auto_approve": True,
+                    "status": "human_gate",
+                }
+            )
+            as_node = "human_gate"
+            message = "Escalation approved; continuing with a recorded Dictator override"
+
+        await self.graph.aupdate_state(self._config(run_id), values, as_node=as_node)
+        self.storage.update_run(run_id, status="running", state={**values, "status": "running"})
+        self.artifacts.write_json(
+            run_id,
+            "resume.json",
+            {"run_id": run_id, "from_stage": "escalation", "decision": values.get("human_decision"), "resumed_at": utcnow()},
+            created_by="chief_orchestrator",
+        )
+        await self.bus.publish(
+            run_id,
+            "run.resumed",
+            message,
+            "chief_orchestrator",
+            {"from_stage": "escalation", "decision": values.get("human_decision")},
+        )
+        try:
+            result = await self.graph.ainvoke(None, self._config(run_id))
+            clean = self._sanitize(dict(result))
+            interrupted = bool(clean.get("__interrupt__"))
+            status = "awaiting_approval" if interrupted else str(clean.get("status", "completed"))
+            self.storage.update_run(run_id, status=status, state=clean)
+            await self.bus.publish(
+                run_id,
+                "run.paused" if interrupted else "run.completed",
+                f"Run {status}",
+                "chief_orchestrator",
+                {"status": status, "resumed_from_escalation": True},
+            )
+            return clean
+        except Exception as exc:
+            error = {"message": str(exc), "type": type(exc).__name__, "at": utcnow()}
+            self.artifacts.write_json(run_id, "error.json", error, created_by="chief_orchestrator")
+            self.storage.update_run(run_id, status="failed", state={**values, "status": "failed", "error": error})
             await self.bus.publish(run_id, "run.failed", str(exc), "chief_orchestrator", error)
             return {"status": "failed", "error": error}
 

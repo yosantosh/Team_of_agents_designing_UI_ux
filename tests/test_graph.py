@@ -162,8 +162,10 @@ def test_escalation_has_easy_summary_and_expandable_details(settings):
             )
         )
         approval = graph.storage.get_approval(result["approval_id"])
-        assert approval["summary"].startswith("The design critic found blockers")
+        assert approval["summary"].startswith("The design was stopped before coding")
+        assert "What happened" in approval["details"]
         assert "Accent text contrast" in approval["details"]
+        assert "What you can do" in approval["details"]
         assert approval["message"] == approval["summary"]
     finally:
         asyncio.run(graph.aclose())
@@ -199,6 +201,123 @@ def test_failed_run_can_resume_from_checkpoint(settings):
         assert resumed["status"] == "completed"
         assert calls["count"] >= 2
         assert graph.storage.list_agent_outputs(run_id)
+    finally:
+        asyncio.run(graph.aclose())
+        graph.storage.close()
+
+
+def test_escalated_design_run_can_force_resume(settings):
+    graph = CompanyGraph(settings)
+    original_critique = graph._critique
+
+    async def escalating_critique(state):
+        return {
+            "critique": {
+                "verdict": "ESCALATE",
+                "score": 0.4,
+                "issues": [
+                    {
+                        "severity": "critical",
+                        "area": "tokens",
+                        "problem": "Blocking issue",
+                        "fix": "Fix it",
+                    }
+                ],
+            },
+            "critique_gate": "escalate",
+            "rework_counts": state.get("rework_counts", {"design": 0, "implementation": 0}),
+            "status": "human_gate",
+        }
+
+    graph._critique = escalating_critique
+    try:
+        result = asyncio.run(
+            graph.run(
+                "Force-continue this design",
+                mode="build",
+                demo=True,
+                auto_approve=True,
+                backend="mock",
+            )
+        )
+        assert result["status"] == "escalated"
+        resumed = asyncio.run(graph.resume_escalated(result["run_id"], {"decision": "override", "notes": "test"}))
+        assert resumed["status"] == "completed"
+        assert resumed["human_decision"]["decision"] == "override"
+    finally:
+        asyncio.run(graph.aclose())
+        graph.storage.close()
+
+
+def test_decline_on_major_escalation_halts_without_dictate(settings):
+    graph = CompanyGraph(settings)
+
+    async def critical_critique(state):
+        return {
+            "critique": {
+                "verdict": "ESCALATE",
+                "score": 0.3,
+                "issues": [
+                    {"severity": "critical", "area": f"area {i}", "problem": "problem", "fix": "fix"}
+                    for i in range(4)
+                ],
+            },
+            "critique_gate": "escalate",
+            "rework_counts": state.get("rework_counts", {"design": 0, "implementation": 0}),
+            "status": "human_gate",
+        }
+
+    graph._critique = critical_critique
+    try:
+        result = asyncio.run(
+            graph.run("Major decision", mode="build", demo=True, auto_approve=True, backend="mock")
+        )
+        assert result["status"] == "escalated"
+        halted = asyncio.run(graph.resume_escalated(result["run_id"], {"decision": "reject", "notes": ""}))
+        assert halted["status"] == "stopped"
+        assert "halted" in halted["reason"]
+    finally:
+        asyncio.run(graph.aclose())
+        graph.storage.close()
+
+
+def test_decline_with_dictate_requests_rework_and_continues(settings):
+    graph = CompanyGraph(settings)
+    original_critique = graph._critique
+    calls = {"count": 0}
+
+    async def flaky_critique(state):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return {
+                "critique": {
+                    "verdict": "ESCALATE",
+                    "score": 0.4,
+                    "issues": [
+                        {"severity": "critical", "area": "layout", "problem": "problem", "fix": "fix"}
+                    ],
+                },
+                "critique_gate": "escalate",
+                "rework_counts": state.get("rework_counts", {"design": 0, "implementation": 0}),
+                "status": "human_gate",
+            }
+        return await original_critique(state)
+
+    graph._critique = flaky_critique
+    try:
+        result = asyncio.run(
+            graph.run("Try a safer design", mode="build", demo=True, auto_approve=True, backend="mock")
+        )
+        assert result["status"] == "escalated"
+        resumed = asyncio.run(
+            graph.resume_escalated(
+                result["run_id"],
+                {"decision": "reject", "notes": "Use a simpler layout and keep the current top bar."},
+            )
+        )
+        assert resumed["status"] == "completed"
+        assert calls["count"] >= 2
+        assert resumed["rework_counts"]["design"] >= 1
     finally:
         asyncio.run(graph.aclose())
         graph.storage.close()
