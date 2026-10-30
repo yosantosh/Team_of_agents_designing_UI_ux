@@ -80,7 +80,7 @@ class Settings:
     auto_approve: bool = True
     max_rework: int = 2
     target_ui_enabled: bool = True
-    target_ui_analyze: bool = True
+    target_ui_analyze: bool = False
 
     monthly_token_budget: int = 100_000_000
     token_warn_pct: int = 80
@@ -153,7 +153,7 @@ class Settings:
             auto_approve=_bool("UIUX_AUTO_APPROVE", True),
             max_rework=_int("UIUX_MAX_REWORK", 2),
             target_ui_enabled=_bool("UIUX_TARGET_UI_ENABLED", True),
-            target_ui_analyze=_bool("UIUX_TARGET_UI_ANALYZE", True),
+            target_ui_analyze=_bool("UIUX_TARGET_UI_ANALYZE", False),
             monthly_token_budget=_int("UIUX_MONTHLY_TOKEN_BUDGET", 100_000_000),
             token_warn_pct=_int("UIUX_TOKEN_WARN_PCT", 80),
             token_hard_stop_pct=_int("UIUX_TOKEN_HARD_STOP_PCT", 100),

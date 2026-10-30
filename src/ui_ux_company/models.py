@@ -93,13 +93,20 @@ class TargetImage(FlexModel):
     image_id: str
     file: str
     sha256: str
+    filename: str = ""
     width: int | None = None
     height: int | None = None
     screen: str | None = None
+    screen_hint: str | None = None
     state: str = "default"
+    state_hint: str | None = None
     theme: str = "dark"
     status: Literal["unanalyzed", "analyzed", "low_confidence", "conflict", "approved"] = "unanalyzed"
     confidence: float = 0.0
+    analysis_is_advisory: bool = True
+    match_score: int = 0
+    match_reason: list[str] = Field(default_factory=list)
+    primary_reference: bool = False
     extracted: dict[str, Any] = Field(default_factory=dict)
     annotations: list[dict[str, Any]] = Field(default_factory=list)
     conflicts: list[str] = Field(default_factory=list)

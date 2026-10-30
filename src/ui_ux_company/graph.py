@@ -295,12 +295,13 @@ class CompanyGraph:
             return text
         return text[:limit].rsplit(" ", 1)[0] + "…"
 
-    def _target_image_paths(self, state: CompanyState, limit: int = 3) -> list[Path]:
+    def _target_image_paths(self, state: CompanyState, limit: int = 8) -> list[Path]:
         manifest = state.get("target_manifest") or {}
         images = select_target_images(
             manifest,
             state.get("change_request") or {},
             state.get("screen_spec") or {},
+            decree=str(state.get("prompt") or ""),
             limit=limit,
         )
         paths: list[Path] = []
@@ -664,7 +665,12 @@ class CompanyGraph:
                 "target_ui.ready",
                 f"{len(manifest.images)} reference image(s) available",
                 "target_ui_analyst",
-                {"screens": [img.screen for img in manifest.images]},
+                {
+                    "screens": [img.screen for img in manifest.images],
+                    "filenames": [img.filename for img in manifest.images],
+                    "selection_method": "filename",
+                    "analysis_is_advisory": True,
+                },
             )
         else:
             await self._event(
@@ -1489,7 +1495,7 @@ class CompanyGraph:
                     "device_matrix": self.profile.visual_qa.get("device_matrix", []),
                     "demo": state.get("demo", False),
                 },
-                images=(screenshots[:4] + self._target_image_paths(state, limit=4))[:8],
+                images=(screenshots[:4] + self._target_image_paths(state, limit=8))[:10],
             )
             visual_result = dict(visual.data)
             if state.get("demo"):

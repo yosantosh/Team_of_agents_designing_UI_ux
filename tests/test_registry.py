@@ -6,7 +6,7 @@ from ui_ux_company.registry import Registry, list_projects, load_budget, load_pr
 
 def test_registry_loads_and_validates(settings):
     registry = load_registry(settings)
-    assert registry.version == "1.0.5"
+    assert registry.version == "1.0.6"
     assert len(registry.agents) >= 30
     assert "ceo" in registry.enabled_agent_ids()
     assert "chief_orchestrator" in registry.enabled_agent_ids()

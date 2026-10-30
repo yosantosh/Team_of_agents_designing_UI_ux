@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import utcnow
+from .target_ui import filename_tokens, guess_screen, guess_state
 
 
 PACKET_VERSION = "1.0"
@@ -37,19 +38,104 @@ def _hash(value: Any) -> str:
     return hashlib.sha256(_compact(value).encode("utf-8")).hexdigest()[:16]
 
 
-def select_target_images(manifest: dict[str, Any], product_brief: dict[str, Any], screen_spec: dict[str, Any], *, limit: int = 4) -> list[dict[str, Any]]:
-    images = list(manifest.get("images") or [])
-    targets = " ".join(
-        [str(item) for item in (product_brief.get("target_screens") or [])]
-        + [str(screen_spec.get("screen") or "")]
-    ).lower()
-    selected = []
-    for image in images:
-        screen = str(image.get("screen") or "").lower()
-        if screen and screen in targets:
-            selected.append(image)
-    return (selected or images)[:limit]
+def _canonical_screens(values: list[Any]) -> set[str]:
+    screens: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        canonical = guess_screen(text)
+        if canonical and canonical != "unknown":
+            screens.add(canonical)
+        screens.update(filename_tokens(text))
+    return screens
 
+
+def rank_target_images(
+    manifest: dict[str, Any],
+    product_brief: dict[str, Any],
+    screen_spec: dict[str, Any],
+    *,
+    decree: str | None = None,
+    limit: int | None = 8,
+) -> list[dict[str, Any]]:
+    """Rank every target image by filename, never by analysis confidence.
+
+    The image itself is the visual truth. Analysis is optional metadata. All
+    images are returned (ordered by relevance) so the agent can identify the
+    reference from its filename even when no screen match is certain.
+    """
+    images = list(manifest.get("images") or [])
+    target_values: list[Any] = []
+    target_values.extend(product_brief.get("target_screens") or [])
+    target_values.extend(product_brief.get("target_surfaces") or [])
+    target_values.append(screen_spec.get("screen"))
+    prompt = str(decree or product_brief.get("prompt") or product_brief.get("decree") or "")
+    requested = _canonical_screens(target_values)
+    prompt_tokens = filename_tokens(prompt)
+
+    ranked: list[dict[str, Any]] = []
+    for index, image in enumerate(images):
+        item = dict(image)
+        filename = str(item.get("filename") or Path(str(item.get("file") or "")).name)
+        hint = str(item.get("screen_hint") or item.get("screen") or guess_screen(filename))
+        state_hint = str(item.get("state_hint") or guess_state(filename))
+        tokens = filename_tokens(filename)
+        score = 0
+        reasons: list[str] = []
+        if hint in requested:
+            score += 30
+            reasons.append(f"filename screen '{hint}' matches requested screen")
+        if hint in prompt_tokens:
+            score += 15
+            reasons.append(f"filename screen '{hint}' appears in decree")
+        overlap = sorted(tokens & prompt_tokens)
+        if overlap:
+            score += min(12, len(overlap) * 3)
+            reasons.append("filename matches decree terms: " + ", ".join(overlap[:5]))
+        if item.get("annotations"):
+            score += 3
+            reasons.append("human annotations present")
+        # Confidence is a tie-breaker only. It is never a selection gate.
+        confidence = item.get("confidence")
+        if isinstance(confidence, (int, float)):
+            score += max(0.0, min(1.0, float(confidence)))
+            reasons.append("vision confidence is advisory")
+        item["filename"] = filename
+        item["screen_hint"] = hint
+        item["state_hint"] = state_hint
+        item["analysis_is_advisory"] = True
+        item["match_score"] = round(score, 2)
+        item["match_reason"] = reasons or ["included as an additional visual reference"]
+        item["primary_reference"] = False
+        item["_rank_index"] = index
+        ranked.append(item)
+
+    ranked.sort(key=lambda image: (-float(image.get("match_score") or 0), int(image.get("_rank_index") or 0)))
+    if ranked:
+        ranked[0]["primary_reference"] = True
+        if not str(ranked[0].get("match_reason") or ""):
+            ranked[0]["match_reason"] = ["first available reference; filename remains authoritative"]
+    for image in ranked:
+        image.pop("_rank_index", None)
+    return ranked[:limit] if limit else ranked
+
+
+def select_target_images(
+    manifest: dict[str, Any],
+    product_brief: dict[str, Any],
+    screen_spec: dict[str, Any],
+    *,
+    decree: str | None = None,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    return rank_target_images(
+        manifest,
+        product_brief,
+        screen_spec,
+        decree=decree,
+        limit=limit,
+    )
 
 def _existing_screen_candidates(repo_path: str | Path | None, screen_name: str) -> list[str]:
     if not repo_path:
@@ -94,20 +180,33 @@ def _existing_screen_candidates(repo_path: str | Path | None, screen_name: str) 
 
 def _compact_image(image: dict[str, Any]) -> dict[str, Any]:
     extracted = image.get("extracted") or {}
+    filename = str(image.get("filename") or Path(str(image.get("file") or "")).name)
+    annotations = []
+    for annotation in image.get("annotations") or []:
+        item = dict(annotation)
+        item.setdefault("filename", filename)
+        item.setdefault("file", image.get("file"))
+        annotations.append(item)
     return {
         "id": image.get("image_id"),
+        "file": image.get("file"),
+        "filename": filename,
         "screen": image.get("screen"),
+        "screen_hint": image.get("screen_hint") or image.get("screen"),
+        "state_hint": image.get("state_hint"),
         "state": image.get("state"),
-        "confidence": image.get("confidence"),
-        "status": image.get("status"),
-        "annotations": image.get("annotations") or [],
+        "match_score": image.get("match_score"),
+        "match_reason": image.get("match_reason") or [],
+        "primary_reference": bool(image.get("primary_reference")),
+        "analysis_confidence": image.get("confidence"),
+        "analysis_is_advisory": True,
+        "annotations": annotations,
         "conflicts": image.get("conflicts") or [],
         "layout": extracted.get("layout") or {},
         "components": _take(extracted.get("components"), 12),
         "visual_roles": extracted.get("visual_roles") or {},
         "states": _take(extracted.get("states"), 12),
     }
-
 
 def build_intent_packet(
     state: dict[str, Any],
@@ -248,7 +347,21 @@ def build_intent_packet(
             "states": screen_spec.get("states") or {},
             "target_fidelity": screen_spec.get("target_fidelity") or {},
             "accessibility_notes": [_clip(item, 380) for item in _take(screen_spec.get("accessibility_notes"), 10)],
-            "target_images": [_compact_image(image) for image in select_target_images(manifest, product_brief, screen_spec)],
+            "target_images": [
+                _compact_image(image)
+                for image in select_target_images(
+                    manifest,
+                    product_brief,
+                    screen_spec,
+                    decree=str(state.get("prompt") or ""),
+                    limit=8,
+                )
+            ],
+            "reference_selection": {
+                "method": "filename",
+                "analysis_is_advisory": True,
+                "rule": "The image filename identifies the screen. The image itself is the visual truth. Do not block on analysis confidence.",
+            },
         },
         "tokens": {
             "tokens": tokens.get("tokens") or {},

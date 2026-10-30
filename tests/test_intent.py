@@ -49,7 +49,10 @@ def _state() -> dict:
             "images": [
                 {
                     "image_id": "target_01",
+                    "file": "/targets/Feed_TopRightMusicIconShouldBeReplaceWithBellIconForNotfication.png",
+                    "filename": "Feed_TopRightMusicIconShouldBeReplaceWithBellIconForNotfication.png",
                     "screen": "feed",
+                    "screen_hint": "feed",
                     "state": "default",
                     "confidence": 0.78,
                     "status": "conflict",
@@ -64,7 +67,10 @@ def _state() -> dict:
                 },
                 {
                     "image_id": "target_06",
+                    "file": "/targets/Profile_edit_profile.png",
+                    "filename": "Profile_edit_profile.png",
                     "screen": "profile",
+                    "screen_hint": "profile",
                     "state": "default",
                     "confidence": 0.9,
                     "status": "analyzed",
@@ -129,8 +135,12 @@ def test_intent_packet_is_selective_and_has_ids():
     assert packet["non_negotiables"][0]["id"] == "NN-1"
     assert packet["must_fix"]["issues"][0]["id"] == "C-1"
     assert packet["deferred"][0]["id"] == "M-1"
-    assert packet["visual_truth"]["target_images"][0]["id"] == "target_01"
-    assert all(image["id"] != "target_06" for image in packet["visual_truth"]["target_images"])
+    target_images = packet["visual_truth"]["target_images"]
+    assert target_images[0]["id"] == "target_01"
+    assert target_images[0]["primary_reference"] is True
+    assert target_images[0]["filename"].startswith("Feed_")
+    assert any(image["id"] == "target_06" for image in target_images)
+    assert packet["visual_truth"]["reference_selection"]["method"] == "filename"
     assert packet["decisions"]["authoritative"]["primary_action"] == "Docked Create FAB"
     assert packet["human_decisions"]["decision"] == "approve"
     assert packet["sources"]
@@ -154,3 +164,41 @@ def test_intent_packet_lists_existing_screen_files(tmp_path):
     screen.write_text("package com.example.dhunchat.ui.feed\n", encoding="utf-8")
     packet = build_intent_packet(_state(), repo_path=tmp_path)
     assert "OrphicApp/app/src/main/java/com/example/dhunchat/ui/feed/FeedScreen.kt" in packet["implementation_policy"]["existing_screen_files"]
+
+
+def test_filename_selection_is_primary_and_confidence_is_advisory():
+    from ui_ux_company.intent import select_target_images
+
+    manifest = {
+        "images": [
+            {
+                "image_id": "target_01",
+                "file": "/targets/Feed_TopRightMusicIconShouldBeReplaceWithBellIconForNotfication.png",
+                "filename": "Feed_TopRightMusicIconShouldBeReplaceWithBellIconForNotfication.png",
+                "screen": "feed",
+                "screen_hint": "feed",
+                "confidence": 0.0,
+                "status": "low_confidence",
+            },
+            {
+                "image_id": "target_03",
+                "file": "/targets/MessageTab_Chat_bottom_rows_should_be_like_feed_image.png",
+                "filename": "MessageTab_Chat_bottom_rows_should_be_like_feed_image.png",
+                "screen": "messages",
+                "screen_hint": "messages",
+                "confidence": 0.99,
+                "status": "analyzed",
+            },
+        ]
+    }
+    selected = select_target_images(
+        manifest,
+        {"prompt": "Match the Feed tab exactly", "target_screens": ["Home/Feed"]},
+        {"screen": "HomeFeed"},
+        decree="Match the Feed tab exactly",
+        limit=8,
+    )
+    assert selected[0]["image_id"] == "target_01"
+    assert selected[0]["primary_reference"] is True
+    assert selected[0]["analysis_is_advisory"] is True
+    assert any(image["image_id"] == "target_03" for image in selected)

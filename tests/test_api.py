@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from ui_ux_company.api import create_app
@@ -46,6 +48,7 @@ def test_api_health_and_registry(settings):
             )
             assert annotated.status_code == 200
             assert annotated.json()["annotations"][0]["label"] == "test"
+            assert annotated.json()["annotations"][0]["filename"] == Path(target["images"][0]["file"]).name
         search = client.get("/api/fs/search", params={"root": str(settings.root), "patterns": "target_ui,current_ui"})
         assert search.status_code == 200
         assert "results" in search.json()

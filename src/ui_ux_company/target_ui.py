@@ -26,31 +26,71 @@ def _hash_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+FILENAME_SCREEN_PATTERNS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("feed", "home", "timeline", "homescreen"), "feed"),
+    (("profile", "account", "avatar", "followers", "following"), "profile"),
+    (("message", "messages", "chat", "inbox", "conversation"), "messages"),
+    (("music", "player", "queue", "nowplaying"), "player"),
+    (("initial", "splash", "orbit", "onboarding", "welcome"), "splash"),
+    (("notification", "notfication", "bell", "activity"), "notifications"),
+    (("create", "compose", "upload", "post"), "create"),
+    (("explore", "discover", "search"), "explore"),
+    (("login", "signin", "signup", "auth"), "login"),
+    (("room", "space"), "room"),
+)
+
+
 def guess_screen(filename: str) -> str:
+    """Infer a screen only from the reference filename.
+
+    The filename is intentionally the strongest contract signal. Vision
+    analysis is optional and must never be required to identify a screen.
+    """
     stem = Path(filename).stem.lower()
-    patterns = {
-        "profile": "profile",
-        "home": "feed",
-        "feed": "feed",
-        "explore": "explore",
-        "search": "explore",
-        "notification": "notifications",
-        "activity": "notifications",
-        "message": "messages",
-        "chat": "messages",
-        "upload": "create",
-        "create": "create",
-        "login": "login",
-        "splash": "splash",
-        "player": "player",
-        "room": "room",
-        "queue": "player_queue",
+    normalized = re.sub(r"[^a-z0-9]+", "_", stem).strip("_")
+    compact = normalized.replace("_", "")
+    best: tuple[int, int, str] | None = None
+    for order, (keys, screen) in enumerate(FILENAME_SCREEN_PATTERNS):
+        for key in keys:
+            position = compact.find(key)
+            if position < 0:
+                continue
+            candidate = (position, order, screen)
+            if best is None or candidate < best:
+                best = candidate
+    if best is not None:
+        return best[2]
+    return normalized or "unknown"
+
+
+FILENAME_STATE_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("permission", "permission_denied"),
+    ("offline", "offline"),
+    ("empty", "empty"),
+    ("error", "error"),
+    ("loading", "loading"),
+    ("edit", "edit"),
+    ("long_text", "long_text"),
+    ("big_size", "large"),
+    ("only_in_big", "large"),
+    ("remove_volume", "simplified"),
+)
+
+
+def guess_state(filename: str) -> str:
+    stem = Path(filename).stem.lower().replace("_", " ")
+    for key, state in FILENAME_STATE_PATTERNS:
+        if key.replace("_", " ") in stem or key in stem:
+            return state
+    return "default"
+
+
+def filename_tokens(filename: str) -> set[str]:
+    return {
+        token
+        for token in re.split(r"[^a-z0-9]+", Path(filename).stem.lower())
+        if token and token not in {"the", "and", "for", "with", "should", "be", "replace", "remove"}
     }
-    for key, screen in patterns.items():
-        if key in stem:
-            return screen
-    cleaned = re.sub(r"[^a-z0-9]+", "_", stem).strip("_")
-    return cleaned or "unknown"
 
 
 def _resolve_manifest_path(settings: Settings, raw: str | None, default: str) -> Path:
@@ -129,12 +169,16 @@ def scan_current_ui(
             TargetImage(
                 image_id=f"current_{len(manifest.images) + 1:02d}",
                 file=str(image_path),
+                filename=image_path.name,
                 sha256=_hash_file(image_path),
                 width=width,
                 height=height,
                 screen=guess_screen(image_path.name),
+                screen_hint=guess_screen(image_path.name),
+                state_hint=guess_state(image_path.name),
                 status="analyzed",
                 confidence=1.0,
+                analysis_is_advisory=True,
                 rights="internal_baseline",
             )
         )
@@ -168,6 +212,15 @@ def scan_target_ui(
     artifact_store: ArtifactStore | None = None,
 ) -> TargetManifest:
     target_path = path or discover_target_ui_path(settings, profile)
+    try:
+        previous = load_manifest(settings, profile)
+    except Exception:
+        previous = TargetManifest(status="not_available")
+    previous_annotations = {
+        Path(image.file).name: list(image.annotations or [])
+        for image in previous.images
+        if image.file
+    }
     manifest = TargetManifest(
         source_path=str(target_path) if target_path else None,
         precedence=str(profile.target_ui.get("precedence", "tiered")),
@@ -195,15 +248,24 @@ def scan_target_ui(
                 width, height = img.size
         except Exception:
             pass
+        annotations = [
+            {**annotation, "file": str(image_path), "filename": image_path.name}
+            for annotation in previous_annotations.get(image_path.name, [])
+        ]
         image = TargetImage(
             image_id=f"target_{len(manifest.images) + 1:02d}",
             file=str(image_path),
+            filename=image_path.name,
             sha256=_hash_file(image_path),
             width=width,
             height=height,
             screen=guess_screen(image_path.name),
+            screen_hint=guess_screen(image_path.name),
+            state_hint=guess_state(image_path.name),
             status="unanalyzed",
             confidence=0.0,
+            analysis_is_advisory=True,
+            annotations=annotations,
             rights=str(profile.target_ui.get("rights_policy", "reference_only")),
         )
         manifest.images.append(image)
@@ -212,7 +274,7 @@ def scan_target_ui(
     # the async vision calls when the caller wants model extraction.
     manifest.status = "scanned"
     manifest.notes.append(
-        "Images were hashed and mapped by filename. Run analyze_manifest() for vision extraction."
+        "Images were hashed and mapped by filename. Filenames are authoritative for screen identity; vision extraction is optional and advisory."
     )
     _write_manifest(settings, profile, manifest, run_id, artifact_store)
     return manifest
@@ -263,6 +325,7 @@ async def analyze_manifest(
             image.extracted = data
             confidence = data.get("confidence")
             image.confidence = float(confidence) if isinstance(confidence, (int, float)) else 0.0
+            image.analysis_is_advisory = True
             if data.get("screen") and image.screen == "unknown":
                 image.screen = str(data["screen"])
             image.conflicts = [str(c) for c in data.get("conflicts", [])]

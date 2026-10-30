@@ -1754,9 +1754,9 @@ function renderTarget() {
     <div class="target-card" data-target-image="${escapeHtml(image.file)}" data-image-id="${escapeHtml(image.image_id)}">
       <img src="/api/target-ui/image?path=${encodeURIComponent(image.file)}" alt="${escapeHtml(image.screen || "target")}" onerror="this.style.display='none'" />
       <div class="info">
-        <b>${escapeHtml(image.screen || "unknown")}</b>
-        ${escapeHtml(image.status)} · conf ${Number(image.confidence || 0).toFixed(2)}<br>
-        ${escapeHtml(short(image.file, 44))}
+        <b>${escapeHtml(image.screen_hint || image.screen || "unknown")}</b>
+        ${escapeHtml(image.state_hint || image.state || "default")} · ${escapeHtml(image.status)} · analysis ${Number(image.confidence || 0).toFixed(2)} (advisory)<br>
+        <span class="target-filename" title="${escapeHtml(image.filename || image.file)}">${escapeHtml(image.filename || image.file)}</span>
       </div>
     </div>
   `).join("") : `<div class="muted">No Target_ui images found. Use Browse folder in Settings or Target_ui.</div>`;
@@ -1766,7 +1766,7 @@ function renderTarget() {
   }
   $("target-conflicts").innerHTML = conflicts.length ? conflicts.map((item) => `
     <div class="item"><div class="title">${escapeHtml(item.screen || "screen")}</div><div class="meta">${escapeHtml(item.conflict)}</div></div>
-  `).join("") : `<div class="muted">No conflicts recorded. Confidence is stored per image.</div>`;
+  `).join("") : `<div class="muted">No conflicts recorded. Filenames select the reference; analysis is advisory.</div>`;
   document.querySelectorAll("[data-target-image]").forEach((el) => {
     el.addEventListener("click", () => openTargetAnnotator(el.dataset.targetImage, el.dataset.imageId));
   });
@@ -1785,7 +1785,7 @@ function openTargetAnnotator(file, imageId) {
       <div id="annotation-list" class="list" style="margin-top:8px"></div>
     </div>
   `;
-  openModal("Annotate Target_ui reference", file, body, `
+  openModal("Annotate Target_ui reference", imageRecord?.filename || file, body, `
     <button class="btn ghost" data-close-modal>Cancel</button>
     <button class="btn primary" id="annotation-save">Save annotations</button>
   `, (modal) => {
@@ -1800,10 +1800,10 @@ function openTargetAnnotator(file, imageId) {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
       for (const ann of annotations) {
-        ctx.strokeStyle = "rgba(168,85,247,.95)";
+        ctx.strokeStyle = "rgba(34,197,94,.95)";
         ctx.lineWidth = Math.max(2, canvas.width / 400);
         ctx.strokeRect(ann.x * canvas.width, ann.y * canvas.height, ann.w * canvas.width, ann.h * canvas.height);
-        ctx.fillStyle = "rgba(168,85,247,.95)";
+        ctx.fillStyle = "rgba(34,197,94,.95)";
         ctx.font = `${Math.max(12, canvas.width / 50)}px sans-serif`;
         ctx.fillText(ann.label || "region", ann.x * canvas.width + 4, ann.y * canvas.height + 18);
       }
@@ -1816,7 +1816,7 @@ function openTargetAnnotator(file, imageId) {
     };
     const renderList = () => {
       modal.querySelector("#annotation-list").innerHTML = annotations.length ? annotations.map((ann, index) => `
-        <div class="item"><div class="title">${escapeHtml(ann.label || "region")}</div><div class="meta">x ${ann.x.toFixed(2)} y ${ann.y.toFixed(2)} w ${ann.w.toFixed(2)} h ${ann.h.toFixed(2)}</div></div>
+        <div class="item"><div class="title">${escapeHtml(ann.label || "region")}</div><div class="meta">x ${ann.x.toFixed(2)} y ${ann.y.toFixed(2)} w ${ann.w.toFixed(2)} h ${ann.h.toFixed(2)} · ${escapeHtml(ann.filename || imageRecord?.filename || "")}</div></div>
       `).join("") : `<div class="muted">No annotations yet. Drag a rectangle on the image.</div>`;
     };
     const point = (event) => {
@@ -1842,6 +1842,8 @@ function openTargetAnnotator(file, imageId) {
           w: draft.w / canvas.width,
           h: draft.h / canvas.height,
           label: modal.querySelector("#annotation-label").value.trim() || "region",
+          file,
+          filename: imageRecord?.filename || file.split("/").pop(),
         });
         renderList();
       }

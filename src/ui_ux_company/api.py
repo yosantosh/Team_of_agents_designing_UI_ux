@@ -650,7 +650,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         image = next((item for item in manifest.images if item.image_id == request.image_id), None)
         if image is None:
             raise HTTPException(status_code=404, detail="target image not found")
-        image.annotations = request.annotations
+        filename = Path(image.file).name
+        image.annotations = [
+            {**annotation, "file": image.file, "filename": filename}
+            for annotation in request.annotations
+        ]
         manifest.status = "annotated"
         save_manifest(settings, profile, manifest)
         await bus.publish(

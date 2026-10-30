@@ -56,10 +56,13 @@ target_ui:
   manifest: "artifacts/target_ui/manifest.json"
   precedence: "tiered"                   # tiered | pixel_perfect | inspiration
   fidelity: "exact"                      # exact | close | inspiration
-  confidence_threshold: 0.80
+  confidence_threshold: 0.80        # advisory only; filename selects the reference
+  selection: "filename"             # filename | analysis
+  pass_all_images: true
+  analysis_is_advisory: true
   on_conflict: "escalate"
   max_images_per_run: 8
-  analyze_with_vision: true
+  analyze_with_vision: false
   rights_policy: "Use competitor/target images for layout and hierarchy reference only. Replace brand assets, fonts, icons, and copy. Run legal/IP review before release."
 
 visual_qa:

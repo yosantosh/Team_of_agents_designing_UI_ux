@@ -565,3 +565,4 @@ input[type="checkbox"] { accent-color: var(--green); }
 
 .top-actions { margin-left: auto; }
 .topbar-page { min-width: 180px; }
+.target-filename { display: block; margin-top: 3px; color: var(--green); font-family: var(--mono); font-size: 8.5px; line-height: 1.35; overflow-wrap: anywhere; }

@@ -1,4 +1,4 @@
-version: "1.0.5"
+version: "1.0.6"
 organization: "Native Android UI/UX Agentic Company"
 owner: "Dictator (Human Product Owner / Manager)"
 description: >
@@ -912,6 +912,13 @@ evolution_history:
     change_type: "manual_config"
     target: "observability"
     summary: "Replaced LangSmith with self-hosted Langfuse for traces, scores, datasets, experiments, and improvement evidence; local SQLite remains the fallback source of truth."
+  - proposal_id: "manual_20261031_filename_target_contract"
+    applied_at: "2026-10-31T00:00:00+00:00"
+    from_version: "1.0.5"
+    to_version: "1.0.6"
+    change_type: "manual_config"
+    target: "target_ui_contract"
+    summary: "Target references are selected by full filename and passed to agents as visual truth; vision analysis confidence is advisory and never a gate. Product, design contract, critic, code, and QA contracts now require primary action, filename references, deviations, nav ownership, and accessibility evidence."
 
 metrics:
   - id: first_pass_yield

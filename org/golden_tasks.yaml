@@ -12,8 +12,9 @@ tasks:
     target_ui: true
     auto_approve: true
     criteria:
-      - "Target_ui references are used directly, not only as text descriptions"
-      - "Single primary Create action"
+      - "Feed target reference identified by full filename and attached directly"
+      - "Target image is treated as visual truth; analysis confidence is not a gate"
+      - "Single primary Create action named explicitly"
       - "All non-happy states are specified"
       - "No critical contrast or 200% font issue"
   - id: homefeed_build_target
@@ -26,6 +27,7 @@ tasks:
     auto_approve: true
     criteria:
       - "Existing FeedScreen.kt modified"
+      - "Target Feed image attached by full filename"
       - "No duplicate HomeFeed screen package"
       - "Compile command succeeds"
       - "Intent coverage returned"

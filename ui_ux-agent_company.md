@@ -40,7 +40,7 @@ The design goal is **human-governed autonomy**:
 |---|---|
 | LangGraph design pipeline | Implemented: intake → Target_ui → discovery → synthesis → design system → visual design → critique → human gate → implementation plan → QA → manager evaluation → release → memory |
 | OpenCode model gateway | Implemented: headless `uiux-worker` agent, JSON output, image attachments, token estimates |
-| Target_ui ingestion | Implemented: folder scan, hashes, screen mapping, vision analysis, manifest, tiered precedence |
+| Target_ui ingestion | Implemented: folder scan, hashes, filename-first screen mapping, full-filename annotations, optional advisory vision analysis, manifest, tiered precedence |
 | Evolution loop | Implemented: observe → diagnose → evaluate → human approval → safe registry apply |
 | Control room | Implemented: dependency-free SPA served by FastAPI, live SSE, approvals, budget, artifacts, evolution |
 | Token ledger | Implemented: per-run/agent/model usage, budget summary, 80/95/100% policy hooks |
@@ -448,24 +448,27 @@ target_ui:
     - /home/pluto/Documents/Target_ui
   manifest: artifacts/target_ui/manifest.json
   precedence: tiered          # tiered | pixel_perfect | inspiration
-  confidence_threshold: 0.80
+  selection: filename         # filename | analysis
+  confidence_threshold: 0.80  # advisory only
+  analysis_is_advisory: true
+  pass_all_images: true
   on_conflict: escalate
   max_images_per_run: 8
-  analyze_with_vision: true
+  analyze_with_vision: false  # manual enrichment only
   rights_policy: "Layout and hierarchy reference only; replace brand assets, fonts, icons, and copy. Legal/IP review before release."
 ```
 
 ### 7.2 Pipeline
 
 1. **Detect** the folder and any new/changed images by SHA-256.
-2. **Classify** each image: screen, device frame, orientation, theme, state.
-3. **Map** the image to the screen inventory. Filename heuristics are only a first pass; the vision agent confirms.
-4. **Extract** layout regions, components, spacing, color roles, typography roles, states, and confidence.
+2. **Identify** the screen and state from the full filename. The earliest screen token wins; filenames are authoritative.
+3. **Rank** every image against the decree and target screens, but do not discard non-matching images. Pass all images to the visual agents.
+4. **Optionally extract** layout regions, components, spacing, color roles, typography roles, states, and confidence. Analysis is advisory only.
 5. **Reconcile** with the design system and Android law. Record conflicts instead of silently guessing.
-6. **Manifest** the result. Every image gets an ID, hash, screen, confidence, extracted data, conflicts, rights, and approval state.
-7. **Use** the manifest in visual design and visual QA.
+6. **Manifest** the result. Every image gets an ID, hash, full filename, screen hint, state hint, annotation records, rights, and optional analysis.
+7. **Use** the actual images and filenames in visual design, implementation, and visual QA. Never gate on confidence.
 8. **Fallback** when no images exist: research-led direction, moodboard, Dictator direction pick. Never invent a target.
-9. **Re-analyze** when the image hash changes; deprecate stale entries.
+9. **Re-scan** when the image hash changes; preserve annotations and deprecate stale analysis.
 
 ### 7.3 Precedence
 
@@ -492,14 +495,18 @@ target_ui:
     {
       "image_id": "target_01",
       "file": "target_ui_example/profile_reference.png",
+      "filename": "Profile_edit profile_following and followers.png",
       "sha256": "f57b8ad8...",
       "width": 1080,
       "height": 2400,
       "screen": "profile",
+      "screen_hint": "profile",
       "state": "default",
+      "state_hint": "edit",
       "theme": "dark",
-      "status": "analyzed",
-      "confidence": 0.86,
+      "status": "scanned",
+      "analysis_is_advisory": true,
+      "confidence": 0.0,
       "extracted": {
         "layout": "identity header + action row + segmented media grid",
         "components": ["avatar", "primary_pill", "glass_pill", "segmented_tabs", "media_tile"],
@@ -526,7 +533,7 @@ target_ui:
 
 ### 7.6 Annotation editor
 
-Target images can be annotated with rectangles and component/region labels. Annotations are stored on the manifest image and passed to the Target_ui Analyst as authoritative region hints. This is human guidance layered on top of vision extraction, not a replacement for it.
+Target images can be annotated with rectangles and component/region labels. Every annotation record stores the full filename and full file path, and annotations survive a rescan. Annotations are passed to the Target_ui Analyst, designer, and implementation worker as authoritative region hints.
 
 ### 7.7 Legal and ethical policy
 
@@ -781,7 +788,7 @@ The SPA uses a narrow left icon rail (labels on hover) and tabs:
 - **Artifacts** — run selector, artifact list, JSON/text/image preview, screenshot upload, and Re-run QA (reuses the existing run; no design rerun).
 - **Contract** — versioned design-contract editor with Save version and Re-run critique.
 - **History** — global combined history of company runs and evolution audits; tapping an entry restores its flow, timeline, artifacts, contract, and outputs. When no company run or evolution audit is active, all live run/evolution panels clear; the entries remain in History.
-- **Target_ui** — target + current-UI browse, recursive folder search, scan, scan + vision analysis, image grid, confidence, conflicts, and rectangle annotation editor.
+- **Target_ui** — target + current-UI browse, recursive folder search, filename-first scan, optional Scan + analyze, full filename display, annotations with filename, conflicts, and rectangle annotation editor.
 - **Evolution** — start/stop audit, live Observe → Diagnose → Evaluate → Approve → Apply → Canary cards, agent output modals, proposal detail, Approve / Reject / Dictate, metric canary, promote, registry rollback, and an explicit **Auto-apply safe changes** pre-approval option.
 - **Settings** — active project switcher, project/current UI/Target_ui browse + Gradle/Manifest/Compose/token validation, searchable OpenCode model picker + model test, editable monthly token budget, autonomy level, webhook/browser notifications, token RBAC session, audit log, runtime info, and mock/demo data purge.
 

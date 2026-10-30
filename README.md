@@ -204,12 +204,16 @@ UIUX_OPENCODE_MODEL=modal/deepseek-v4.1-flash-1017
 Drop reference images into `target_ui_example/` (or point `UIUX_TARGET_UI_PATH` at a folder). The company:
 
 1. Hashes each image.
-2. Maps it to a screen.
-3. Uses a vision model to extract layout, components, color roles, typography, states, and confidence.
-4. Writes `artifacts/target_ui/manifest.json`.
-5. Uses the manifest in visual design and visual QA.
+2. Identifies the screen and state from the **full filename** (`Feed_...`, `Profile_...`, `MessageTab_...`, `MusicTab_...`).
+3. Passes all reference images — ordered by filename relevance — to the visual designer, critic, implementation worker, and visual QA.
+4. Writes `artifacts/target_ui/manifest.json` with filename, screen hint, state hint, and annotation metadata.
+5. Treats the image itself as visual truth. Vision analysis is optional and advisory; confidence `0.0` never blocks selection or AC4.
 
-**Precedence:** target wins layout/composition; design tokens and Android/a11y law win color, type, and accessibility; conflicts escalate to the Dictator.
+**Filename selection:** `Feed_TopRight...png` is the Feed reference even if vision extraction fails. `MessageTab...` is Messages even if its description mentions “like feed image”. The earliest filename term wins.
+
+**Annotations:** every annotation record carries the full filename and full file path, and annotations survive a rescan.
+
+**Precedence:** target wins layout/composition; design tokens and Android/a11y law win color, type, and accessibility; conflicts escalate to the Dictator. Scan without analysis is the default. **Scan + analyze** remains a manual enrichment tool.
 
 `target_ui_example/profile_reference.png` is a generated placeholder, not a real product screenshot. For competitor screenshots: use structure only, replace brand assets, and run legal/IP review.
 
@@ -312,7 +316,7 @@ A19 and CodeWorker receive the packet directly. CodeWorker also receives the imp
 
 ### Visual signal links
 
-Target_ui pixels are no longer limited to A13. The relevant 2–4 reference images are attached directly to A18 Visual UI Designer, A22 Independent Design Critic, A19 Compose Implementer, the OpenCode build worker, and Visual QA (paired with current screenshots). A9/A10/A11/A16 and the executive/lead agents still receive only manifest text; sending pixels to every agent would add cost and dilute focus.
+Target_ui pixels are no longer limited to A13. All reference images (up to `max_images_per_run`, default 8) are attached directly to A18 Visual UI Designer, A22 Independent Design Critic, A19 Compose Implementer, the OpenCode build worker, and Visual QA (paired with current screenshots). Filenames identify the screen; analysis confidence is advisory only. A9/A10/A11/A16 and the executive/lead agents still receive manifest text; sending pixels to every agent would add cost and dilute focus.
 
 ### Rollback and delete
 
