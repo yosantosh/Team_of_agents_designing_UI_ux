@@ -52,7 +52,7 @@ class _RecordingCodeWorker:
     def __init__(self):
         self.calls = []
 
-    async def apply(self, run_id, repo_path, goal, context, intent_packet=None):
+    async def apply(self, run_id, repo_path, goal, context, intent_packet=None, images=None):
         self.calls.append(
             {
                 "run_id": run_id,
@@ -63,6 +63,7 @@ class _RecordingCodeWorker:
                     item.get("id") for item in (intent_packet or {}).get("non_negotiables", [])
                 ][:3],
                 "has_plan": bool(context.get("implementation_plan")),
+                "image_count": len(images or []),
             }
         )
         return {

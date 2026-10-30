@@ -500,14 +500,84 @@ function renderHistory() {
         <span>${escapeHtml(item.mode || "")}</span>
         <span>${fmtTime(item.created_at)}</span>
       </div>
+      ${item.kind === "company" ? `<div class="history-actions">
+        ${item.has_code ? `<button class="btn ghost small" data-history-undo="${escapeHtml(item.id)}" title="Undo the code changes from this run">Undo code</button>` : ""}
+        <button class="btn danger small" data-history-delete="${escapeHtml(item.id)}" title="Delete this run and its saved data">Delete</button>
+      </div>` : ""}
     </div>
   `).join("") : `<div class="muted">No history entries for this filter.</div>`;
   list.querySelectorAll("[data-history-id]").forEach((el) => {
-    el.addEventListener("click", () => {
+    el.addEventListener("click", (event) => {
+      if (event.target.closest("[data-history-undo], [data-history-delete]")) return;
       if (el.dataset.historyKind === "evolution") loadHistoryEvolution(el.dataset.historyId);
       else loadHistoryRun(el.dataset.historyId);
     });
   });
+  list.querySelectorAll("[data-history-undo]").forEach((button) => {
+    button.addEventListener("click", (event) => { event.stopPropagation(); openUndoCode(button.dataset.historyUndo); });
+  });
+  list.querySelectorAll("[data-history-delete]").forEach((button) => {
+    button.addEventListener("click", (event) => { event.stopPropagation(); openDeleteRun(button.dataset.historyDelete); });
+  });
+}
+
+function openUndoCode(runId) {
+  openModal(
+    "Undo this run's code?",
+    runId,
+    `<p class="muted">This removes the run's isolated worktree and branch when safe. If the code was already merged or the run used direct mode, it applies a reverse patch or a Git revert instead. The main branch is never reset.</p>
+     <p class="hint">The run history and artifacts are kept; a <code>rollback.json</code> record is added.</p>`,
+    `<button class="btn ghost" data-close-modal>Cancel</button><button class="btn danger" id="confirm-undo-code">Undo code</button>`,
+    (modal) => {
+      modal.querySelector("#confirm-undo-code").addEventListener("click", async () => {
+        const button = modal.querySelector("#confirm-undo-code");
+        button.disabled = true;
+        button.textContent = "Undoing…";
+        try {
+          const result = await api(`/api/runs/${encodeURIComponent(runId)}/rollback`, {
+            method: "POST",
+            body: JSON.stringify({ mode: "auto", confirm: true }),
+          });
+          closeModal();
+          toast(`Code rollback: ${result.action}`);
+          await poll();
+          if (state.runId === runId) await loadRun(runId, false);
+        } catch (error) {
+          button.disabled = false;
+          button.textContent = "Undo code";
+          toast(`Rollback error: ${error.message}`, "error");
+        }
+      });
+    },
+  );
+}
+
+function openDeleteRun(runId) {
+  openModal(
+    "Delete this run permanently?",
+    runId,
+    `<p class="muted">This removes the run record, approvals, events, agent outputs, token rows, saved artifacts, and its isolated worktree. It does not reset the main project branch.</p>
+     <p class="hint">This cannot be undone from the dashboard.</p>`,
+    `<button class="btn ghost" data-close-modal>Cancel</button><button class="btn danger" id="confirm-delete-run">Delete run</button>`,
+    (modal) => {
+      modal.querySelector("#confirm-delete-run").addEventListener("click", async () => {
+        const button = modal.querySelector("#confirm-delete-run");
+        button.disabled = true;
+        button.textContent = "Deleting…";
+        try {
+          await api(`/api/runs/${encodeURIComponent(runId)}`, { method: "DELETE" });
+          closeModal();
+          toast("Run deleted.");
+          if (state.runId === runId) clearRunContext({ render: true });
+          await poll();
+        } catch (error) {
+          button.disabled = false;
+          button.textContent = "Delete run";
+          toast(`Delete error: ${error.message}`, "error");
+        }
+      });
+    },
+  );
 }
 
 function renderRuns() {

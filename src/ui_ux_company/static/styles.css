@@ -161,6 +161,7 @@ input[type="checkbox"] { accent-color: var(--purple); }
 .item.clickable:hover { border-color: rgba(168,85,247,0.35); background: rgba(168,85,247,0.05); }
 .item .title { font-size: 11.5px; line-height: 1.45; }
 .item .meta { font-size: 9.5px; color: var(--meta); margin-top: 4px; display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
+.history-actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
 .badge { font-size: 8.5px; text-transform: uppercase; letter-spacing: .06em; padding: 2px 6px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
 .badge.pass, .badge.completed, .badge.applied { color: var(--green); border-color: rgba(34,197,94,.3); }
 .badge.fail, .badge.failed, .badge.escalated, .badge.stopped { color: var(--red); border-color: rgba(255,59,48,.3); }

@@ -477,6 +477,30 @@ class Storage:
             (run_id, after_id, limit),
         )
 
+    def delete_run(self, run_id: str) -> dict[str, Any]:
+        """Delete a run and all of its saved relational data.
+
+        Filesystem artifacts are returned before deletion so the caller can clean
+        them up. This is intentionally explicit: callers must confirm the action.
+        """
+        artifacts = self.list_artifacts(run_id)
+        artifact_paths = [a.get("path") for a in artifacts if a.get("path")]
+        counts: dict[str, int] = {}
+        with self._lock:
+            for table in (
+                "agent_outputs",
+                "agent_messages",
+                "events",
+                "approvals",
+                "artifacts",
+                "token_usage",
+                "runs",
+            ):
+                cur = self._conn.execute(f"DELETE FROM {table} WHERE run_id=?", (run_id,))
+                counts[table] = int(cur.rowcount or 0)
+            self._conn.commit()
+        return {"run_id": run_id, "deleted": counts, "artifact_paths": artifact_paths}
+
     # ------------------------------------------------------- agent outputs
     def add_agent_output(
         self,

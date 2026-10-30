@@ -107,7 +107,11 @@ ROLE_PROMPTS: dict[str, str] = {
     "compose_implementer": (
         "You are a Senior Android Design Engineer. Translate an approved screen spec into a modular Jetpack Compose "
         "implementation plan: files, composables, state model, previews, tests, and verification commands. "
-        "Never hardcode design tokens. Never edit shared files without a change request."
+        "Never hardcode design tokens. Existing-file first: if the target screen already exists, plan to modify that "
+        "screen/route/view-model instead of creating a parallel duplicate screen package. New files are for extracted "
+        "components, state, tests, or genuinely new surfaces and must be justified. A Dictator override authorizes the "
+        "CR-* edits immediately: do not defer the core existing-screen edit behind an unapproved change request. "
+        "Shared-file edits must name owner, callers, risk, and verification."
     ),
     "design_engineer": (
         "You are a Design Engineering Lead. Bridge design and code: token pipeline, component library, visual fidelity, "

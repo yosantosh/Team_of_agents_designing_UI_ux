@@ -121,6 +121,7 @@ class CodeWorker:
         goal: str,
         context: dict[str, Any],
         intent_packet: dict[str, Any] | None = None,
+        images: list[Path] | None = None,
     ) -> dict[str, Any]:
         if not self.enabled:
             return {"status": "disabled", "reason": "UIUX_CODE_EDITS is off"}
@@ -129,13 +130,18 @@ class CodeWorker:
             return {"status": "failed", "reason": f"target repo is not a git repository: {repo}"}
         mode = str(getattr(self.settings, "code_edit_mode", "worktree"))
         if mode == "direct":
+            base, snapshot_error = await self._snapshot_commit(repo, run_id)
+            if snapshot_error:
+                return {"status": "failed", "reason": snapshot_error}
             worktree = repo
             branch = self._git_branch(repo)
+            worker_commit = None
         else:
             base, snapshot_error = await self._snapshot_commit(repo, run_id)
             if snapshot_error:
                 return {"status": "failed", "reason": snapshot_error}
             branch = f"uiux/{run_id}"
+            worker_commit = None
             worktree = self.settings.runtime_dir / "worktrees" / run_id
             await self._run(["git", "worktree", "remove", "--force", str(worktree)], repo, 60)
             await self._run(["git", "worktree", "prune"], repo, 60)
@@ -175,12 +181,26 @@ class CodeWorker:
                 "APPROVED CONTEXT:\n"
                 + json.dumps(context, ensure_ascii=False, indent=2, default=str)[:60000]
             )
+        existing_screen_files = (
+            ((intent_packet or {}).get("implementation_policy") or {}).get("existing_screen_files") or []
+        )
+        scope_line = (
+            "You MUST modify at least one of these existing screen files if it exists: "
+            + ", ".join(existing_screen_files)
+            + ".\n"
+        ) if existing_screen_files else ""
         prompt = (
             "You are the Android implementation worker for the UI/UX Agent Company. "
             "Edit the project files directly to implement the approved design. "
             "Respect the repository AGENTS.md, design tokens, shared-file ownership, and the approved plan. "
+            "Existing-file first: when intent_packet.implementation_policy.existing_screen_files is non-empty, "
+            "edit those existing files and preserve their callers instead of creating a parallel screen package. "
+            "The implementation plan's CR-* modify entries are authorized when human_decisions.decision is override; "
+            "implement them NOW, do not defer the core screen work to new files or an unapproved change request. New files are only for extracted "
+            "components, state, tests, or genuinely new surfaces, and must be justified. "
             "Do not touch secrets or production infrastructure. Keep the change surgical. "
-            "Run the narrowest useful verification command if the repository supports it. "
+            + scope_line
+            + "Run the narrowest useful verification command if the repository supports it. "
             "When finished, briefly summarize files changed and verification evidence. "
             "Then output exactly one final JSON object with `intent_coverage`: "
             "a list of {id, status, evidence} for every NN-* and C-* item you implemented, "
@@ -200,6 +220,9 @@ class CodeWorker:
             "--format",
             "json",
         ]
+        for image in images or []:
+            if Path(image).exists():
+                cmd.extend(["--file", str(Path(image).resolve())])
         code, stdout, stderr = await self._run(
             cmd,
             worktree,
@@ -242,6 +265,11 @@ class CodeWorker:
             )
             if commit_code == 0:
                 _, diff, _ = await self._run(["git", "diff", "HEAD~1", "HEAD", "--binary"], worktree, 120)
+                _, names_out, _ = await self._run(["git", "diff", "--name-only", "HEAD~1", "HEAD"], worktree, 60)
+                if names_out.strip():
+                    changed_files = [line for line in names_out.splitlines() if line.strip()]
+                _, worker_out, _ = await self._run(["git", "rev-parse", "HEAD"], worktree, 60)
+                worker_commit = worker_out.strip() or None
             else:
                 errors.append(f"git commit failed: {commit_err[:1000]}")
                 _, diff, _ = await self._run(["git", "diff", "--cached", "--binary", "HEAD"], worktree, 120)
@@ -253,12 +281,12 @@ class CodeWorker:
             try:
                 env_extra = {"GIT_INDEX_FILE": index_path}
                 read_code, _read_out, _read_err = await self._run(
-                    ["git", "read-tree", "HEAD"], worktree, 60, env_extra
+                    ["git", "read-tree", base], worktree, 60, env_extra
                 )
                 if read_code == 0:
                     await self._run(["git", "add", "-A"], worktree, 60, env_extra)
                     _, diff, _ = await self._run(
-                        ["git", "diff", "--cached", "--binary", "HEAD"], worktree, 120, env_extra
+                        ["git", "diff", "--cached", "--binary", base], worktree, 120, env_extra
                     )
                 else:
                     _, diff, _ = await self._run(["git", "diff", "--binary"], worktree, 120)
@@ -270,14 +298,29 @@ class CodeWorker:
             self.artifacts.write_text(run_id, "code_diff.patch", diff, "text/x-patch", created_by="code_worker")
         if intent_coverage:
             self.artifacts.write_json(run_id, "intent_coverage.json", {"items": intent_coverage}, created_by="code_worker")
+        status_value = "edited" if changed_files else ("failed" if code != 0 else "no_changes")
+        scope_reason = ""
+        if status_value == "edited" and existing_screen_files:
+            normalized = {str(item).replace("\\", "/") for item in changed_files}
+            if not any(str(item).replace("\\", "/") in normalized for item in existing_screen_files):
+                status_value = "failed_scope"
+                scope_reason = (
+                    "worker created new files but did not modify the existing screen file(s): "
+                    + ", ".join(existing_screen_files)
+                )
+                errors.append(scope_reason)
         result = {
-            "status": "edited" if changed_files else ("failed" if code != 0 else "no_changes"),
+            "status": status_value,
             "mode": mode,
             "worktree": str(worktree),
             "branch": branch,
+            "base_commit": base,
+            "worker_commit": worker_commit,
+            "repo_path": str(repo),
             "changed_files": changed_files[:200],
             "tool_calls": tools,
             "errors": errors,
+            "reason": scope_reason,
             "exit_code": code,
             "summary": "\n".join(texts)[-4000:],
             "diff_artifact": "code_diff.patch" if diff else None,

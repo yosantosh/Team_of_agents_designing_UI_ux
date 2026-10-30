@@ -63,7 +63,7 @@ models:
   coder:
     provider: opencode
     model: modal/deepseek-v4.1-flash-1017
-    capabilities: [text, reasoning, code]
+    capabilities: [text, image, reasoning, code]
     context_tokens: 1048576
     cost_per_million_input: 0.25
     cost_per_million_output: 1.00

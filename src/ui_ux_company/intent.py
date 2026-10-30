@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+from pathlib import Path
 from typing import Any
 
 from .models import utcnow
@@ -35,7 +37,7 @@ def _hash(value: Any) -> str:
     return hashlib.sha256(_compact(value).encode("utf-8")).hexdigest()[:16]
 
 
-def _relevant_images(manifest: dict[str, Any], product_brief: dict[str, Any], screen_spec: dict[str, Any]) -> list[dict[str, Any]]:
+def select_target_images(manifest: dict[str, Any], product_brief: dict[str, Any], screen_spec: dict[str, Any], *, limit: int = 4) -> list[dict[str, Any]]:
     images = list(manifest.get("images") or [])
     targets = " ".join(
         [str(item) for item in (product_brief.get("target_screens") or [])]
@@ -46,7 +48,48 @@ def _relevant_images(manifest: dict[str, Any], product_brief: dict[str, Any], sc
         screen = str(image.get("screen") or "").lower()
         if screen and screen in targets:
             selected.append(image)
-    return (selected or images)[:4]
+    return (selected or images)[:limit]
+
+
+def _existing_screen_candidates(repo_path: str | Path | None, screen_name: str) -> list[str]:
+    if not repo_path:
+        return []
+    repo = Path(repo_path).expanduser()
+    if not repo.exists():
+        return []
+    screen_lower = (screen_name or "").lower()
+    if "feed" in screen_lower or "home" in screen_lower:
+        words = {"feed", "home", "homefeed"}
+    elif "profile" in screen_lower:
+        words = {"profile"}
+    elif "chat" in screen_lower or "message" in screen_lower:
+        words = {"chat", "message"}
+    elif "music" in screen_lower or "player" in screen_lower:
+        words = {"music", "player"}
+    elif "auth" in screen_lower or "login" in screen_lower or "signup" in screen_lower:
+        words = {"auth", "login", "signup"}
+    else:
+        words = {part.lower() for part in re.findall(r"[A-Z]?[a-z]{4,}", screen_name or "")}
+    roots = [repo / "OrphicApp" / "app" / "src" / "main" / "java", repo / "app" / "src" / "main" / "java"]
+    roots = [root for root in roots if root.exists()] or [repo]
+    matches = []
+    for root in roots:
+        for path in root.rglob("*.kt"):
+            stem = path.stem.lower()
+            rel = str(path.relative_to(repo)) if path.is_relative_to(repo) else str(path)
+            normalized = rel.replace("\\", "/")
+            is_screenish = (
+                stem.endswith(("screen", "viewmodel", "route", "sheet"))
+                or "screen" in stem
+                or ("feed" in words or "home" in words) and stem == "mainscreen"
+            )
+            if not is_screenish:
+                continue
+            if "/ui/" not in normalized and stem != "mainscreen":
+                continue
+            if any(word in stem for word in words) or ({"feed", "home"} & words and stem == "mainscreen"):
+                matches.append(rel)
+    return sorted(set(matches))[:12]
 
 
 def _compact_image(image: dict[str, Any]) -> dict[str, Any]:
@@ -70,6 +113,7 @@ def build_intent_packet(
     state: dict[str, Any],
     *,
     max_chars: int = DEFAULT_MAX_CHARS,
+    repo_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Build a compact, authoritative residual context packet for implementation.
 
@@ -146,6 +190,20 @@ def build_intent_packet(
             "screen_spec",
             "implementation_plan",
         ],
+        "implementation_policy": {
+            "existing_file_first": True,
+            "rule": (
+                "If an existing screen file is listed below, modify it. Do not create a parallel "
+                "screen package just to avoid touching the existing file. New files are allowed for "
+                "extracted components, state, tests, or genuinely new surfaces; explain why in the plan."
+            ),
+            "existing_screen_files": _existing_screen_candidates(repo_path, str(screen_spec.get("screen") or "")),
+            "shared_file_edits": (
+                "When human_decisions.decision is override, the CR-* and modify entries in the plan are "
+                "AUTHORIZED NOW. Do not defer the core screen edit behind an unapproved change request; "
+                "implement the existing-file edit and preserve all other callers."
+            ),
+        },
         "north_star": {
             "decree": _clip(product_brief.get("prompt") or state.get("prompt"), 700),
             "change_type": product_brief.get("change_type"),
@@ -189,7 +247,7 @@ def build_intent_packet(
             "states": screen_spec.get("states") or {},
             "target_fidelity": screen_spec.get("target_fidelity") or {},
             "accessibility_notes": [_clip(item, 380) for item in _take(screen_spec.get("accessibility_notes"), 10)],
-            "target_images": [_compact_image(image) for image in _relevant_images(manifest, product_brief, screen_spec)],
+            "target_images": [_compact_image(image) for image in select_target_images(manifest, product_brief, screen_spec)],
         },
         "tokens": {
             "tokens": tokens.get("tokens") or {},

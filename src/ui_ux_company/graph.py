@@ -17,7 +17,7 @@ from .codeworker import CodeWorker
 from .config import Settings
 from .events import EventBus
 from .gateway import ModelGateway
-from .intent import build_intent_packet
+from .intent import build_intent_packet, select_target_images
 from .models import new_id, utcnow
 from .prompts import work_label
 from .registry import BudgetPolicy, ProjectProfile, Registry, load_budget, load_profile, load_registry
@@ -285,6 +285,24 @@ class CompanyGraph:
         if len(text) <= limit:
             return text
         return text[:limit].rsplit(" ", 1)[0] + "…"
+
+    def _target_image_paths(self, state: CompanyState, limit: int = 3) -> list[Path]:
+        manifest = state.get("target_manifest") or {}
+        images = select_target_images(
+            manifest,
+            state.get("change_request") or {},
+            state.get("screen_spec") or {},
+            limit=limit,
+        )
+        paths: list[Path] = []
+        for image in images:
+            raw = image.get("file")
+            if not raw:
+                continue
+            path = Path(str(raw)).expanduser()
+            if path.exists() and path not in paths:
+                paths.append(path)
+        return paths
 
     def _record_agent_output(
         self,
@@ -911,6 +929,7 @@ class CompanyGraph:
                 "rework_count": state.get("rework_counts", {}).get("design", 0),
                 "design_system": self.profile.design_system,
             },
+            images=self._target_image_paths(state),
         )
         await self._write(state, "screen_spec.json", result.data, "visual_ui_designer")
         await self._event(state, "stage.completed", "Screen spec ready", "visual_ui_designer")
@@ -961,6 +980,7 @@ class CompanyGraph:
                 "synthesis": state.get("synthesis", {}),
                 "android_quality": self.profile.android_quality,
             },
+            images=self._target_image_paths(state),
         )
         critique = dict(result.data)
         verdict = str(critique.get("verdict", "ESCALATE")).upper()
@@ -1151,6 +1171,7 @@ class CompanyGraph:
                 intent_packet = build_intent_packet(
                     state,
                     max_chars=int(getattr(self.settings, "intent_packet_max_chars", 160000)),
+                    repo_path=self.profile.project.get("repo") or self.settings.project_dir,
                 )
                 await self._write(state, "intent_packet.json", intent_packet, "chief_orchestrator")
                 await self._event(
@@ -1184,8 +1205,11 @@ class CompanyGraph:
             state,
             "compose_implementer",
             "Translate the approved intent packet into a surgical Compose implementation plan with files, state, previews, tests, and verification commands. "
-            "The intent_packet is authoritative; preserve exact tokens, decisions, target fidelity, and must-fix constraints. Do not average or reinterpret it.",
+            "The intent_packet is authoritative; preserve exact tokens, decisions, target fidelity, and must-fix constraints. Do not average or reinterpret it. "
+            "If implementation_policy.existing_screen_files is non-empty, you must plan to modify at least one of those existing screen files; "
+            "do not create a parallel screen package and do not defer the core screen work to an unapproved change request. A Dictator override authorizes the listed CR-* edits now.",
             plan_context,
+            images=self._target_image_paths(state),
         )
         data = dict(result.data)
         if state.get("demo"):
@@ -1255,6 +1279,7 @@ class CompanyGraph:
                         str(state.get("change_request", {}).get("problem") or state.get("prompt", "Implement the approved design")),
                         code_context,
                         intent_packet=intent_packet,
+                        images=self._target_image_paths(state),
                     )
                 except Exception as exc:
                     code_result = {"status": "failed", "reason": str(exc)}
@@ -1380,7 +1405,7 @@ class CompanyGraph:
                     "device_matrix": self.profile.visual_qa.get("device_matrix", []),
                     "demo": state.get("demo", False),
                 },
-                images=screenshots[:4],
+                images=(screenshots[:4] + self._target_image_paths(state, limit=4))[:8],
             )
             visual_result = dict(visual.data)
             if state.get("demo"):
@@ -2172,6 +2197,16 @@ class CompanyGraph:
             self.storage.update_run(run_id, status="failed", state={**values, "status": "failed", "error": error})
             await self.bus.publish(run_id, "run.failed", str(exc), "chief_orchestrator", error)
             return {"status": "failed", "error": error}
+
+    async def delete_thread(self, run_id: str) -> None:
+        """Best-effort removal of the LangGraph checkpoint thread for a deleted run."""
+        try:
+            await self._ensure_graph()
+            checkpointer = getattr(self.graph, "checkpointer", None)
+            if checkpointer and hasattr(checkpointer, "adelete_thread"):
+                await checkpointer.adelete_thread(run_id)
+        except Exception:
+            pass
 
     async def get_state(self, run_id: str) -> dict[str, Any]:
         try:

@@ -263,6 +263,19 @@ Before A19 writes the implementation plan, the company builds `intent_packet.jso
 
 A19 and CodeWorker receive the packet directly. CodeWorker also receives the implementation plan separately, so neither is cut off by the old 60k-character slice. The worker writes `code_edit_result.json` with an `intent_coverage` list when it can, and `intent_coverage.json` when coverage is returned. Packet budgets are configurable with `UIUX_INTENT_PACKET_MAX_CHARS`, `UIUX_CODE_WORKER_PACKET_CHARS`, `UIUX_CODE_WORKER_PLAN_CHARS`, and `UIUX_CODE_WORKER_OTHER_CHARS`.
 
+### Visual signal links
+
+Target_ui pixels are no longer limited to A13. The relevant 2–4 reference images are attached directly to A18 Visual UI Designer, A22 Independent Design Critic, A19 Compose Implementer, the OpenCode build worker, and Visual QA (paired with current screenshots). A9/A10/A11/A16 and the executive/lead agents still receive only manifest text; sending pixels to every agent would add cost and dilute focus.
+
+### Rollback and delete
+
+Every company run in **History** has **Undo code** and **Delete** actions.
+
+- **Undo code** discards the run's isolated worktree/branch when it is unmerged, applies a reverse patch for direct-mode edits, or uses `git revert` for merged work. The main branch is never hard-reset.
+- **Delete** removes the run record, approvals, events, messages, agent outputs, token rows, artifacts, and isolated worktree. It does not reset the main project branch.
+
+API: `POST /api/runs/{run_id}/rollback`, `DELETE /api/runs/{run_id}`. Each rollback writes `rollback.json`; deletion is recorded in the audit log.
+
 ### Read-only repo inspection
 
 A5 Engineering Lead and A19 Compose Implementer use the project-local `uiux-reader` OpenCode agent. It has **read/glob/grep/list/lsp** access to `/home/pluto/main_projects/**`, but **no edit, write, bash, or network tools**. It can inspect the actual Android repo while producing the plan/review. The actual code edit still goes through the isolated `build` worker.

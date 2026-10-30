@@ -98,7 +98,7 @@ class Settings:
     code_edit_mode: str = "worktree"          # worktree | direct
     code_worker_agent: str = "build"
     code_worker_model: str = ""
-    code_worker_timeout: int = 900
+    code_worker_timeout: int = 2400
     intent_packet_max_chars: int = 160000
     code_worker_packet_chars: int = 160000
     code_worker_plan_chars: int = 40000
@@ -159,7 +159,7 @@ class Settings:
             code_edit_mode=os.getenv("UIUX_CODE_EDIT_MODE", "worktree").strip().lower(),
             code_worker_agent=os.getenv("UIUX_CODE_WORKER_AGENT", "build"),
             code_worker_model=os.getenv("UIUX_CODE_WORKER_MODEL", ""),
-            code_worker_timeout=_int("UIUX_CODE_WORKER_TIMEOUT", 900),
+            code_worker_timeout=_int("UIUX_CODE_WORKER_TIMEOUT", 2400),
             intent_packet_max_chars=_int("UIUX_INTENT_PACKET_MAX_CHARS", 160000),
             code_worker_packet_chars=_int("UIUX_CODE_WORKER_PACKET_CHARS", 160000),
             code_worker_plan_chars=_int("UIUX_CODE_WORKER_PLAN_CHARS", 40000),

@@ -57,3 +57,15 @@ def test_api_health_and_registry(settings):
         flow = client.get("/flow")
         assert flow.status_code == 200
         assert "Live orchestration flow" in flow.text
+
+
+def test_api_delete_run_removes_history_entry(settings):
+    app = create_app(settings)
+    with TestClient(app) as client:
+        app.state.storage.create_run("run_api_delete", "delete me", "design", "completed")
+        response = client.delete("/api/runs/run_api_delete")
+        assert response.status_code == 200
+        assert response.json()["deleted"]["runs"] == 1
+        assert app.state.storage.get_run("run_api_delete") is None
+        history = client.get("/api/history").json()["history"]
+        assert all(item["id"] != "run_api_delete" for item in history)

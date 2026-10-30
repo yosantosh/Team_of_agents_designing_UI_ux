@@ -146,3 +146,11 @@ def test_intent_packet_drops_optional_sections_when_over_budget():
 def test_intent_packet_is_json_serializable():
     packet = build_intent_packet(_state())
     json.dumps(packet, ensure_ascii=False, default=str)
+
+
+def test_intent_packet_lists_existing_screen_files(tmp_path):
+    screen = tmp_path / "OrphicApp/app/src/main/java/com/example/dhunchat/ui/feed/FeedScreen.kt"
+    screen.parent.mkdir(parents=True)
+    screen.write_text("package com.example.dhunchat.ui.feed\n", encoding="utf-8")
+    packet = build_intent_packet(_state(), repo_path=tmp_path)
+    assert "OrphicApp/app/src/main/java/com/example/dhunchat/ui/feed/FeedScreen.kt" in packet["implementation_policy"]["existing_screen_files"]

@@ -28,6 +28,7 @@ from .models import ApprovalDecision, EvolutionRequest, RunRequest, new_id
 from .notifications import Notifier
 from .project_validation import validate_android_project
 from .registry import list_projects, load_budget, load_profile, load_registry, load_yaml
+from .rollback import RollbackError, RollbackService
 from .storage import Storage
 from .target_ui import (
     analyze_manifest,
@@ -70,6 +71,11 @@ class RunResumeRequest(BaseModel):
     decision: dict[str, Any] | None = None
 
 
+class RunRollbackRequest(BaseModel):
+    mode: str = "auto"
+    confirm: bool = True
+
+
 class DesignContractUpdate(BaseModel):
     contract: dict[str, Any]
 
@@ -103,6 +109,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     storage.dismiss_stale_approvals()
     bus = EventBus(storage, Notifier(settings))
     artifacts = ArtifactStore(settings, storage)
+    rollback_service = RollbackService(settings, storage, artifacts)
     gateway = ModelGateway(settings, registry, storage)
     agents = AgentRunner(gateway, registry)
     company = CompanyGraph(
@@ -153,6 +160,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.storage = storage
     app.state.bus = bus
     app.state.artifacts = artifacts
+    app.state.rollback = rollback_service
     app.state.company = company
     app.state.evolution = evolution
     app.state.tasks = set()
@@ -783,6 +791,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "from_stage": ", ".join(snapshot.get("next") or []) or "approval",
         }
 
+    @app.post("/api/runs/{run_id}/rollback")
+    async def rollback_run(run_id: str, request: RunRollbackRequest):
+        if not request.confirm:
+            raise HTTPException(status_code=400, detail="rollback requires confirm=true")
+        try:
+            result = rollback_service.execute(run_id, request.mode, confirm=True)
+        except RollbackError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        await bus.publish(run_id, "run.rollback", f"Code rolled back ({result.get('action')})", "dictator", result)
+        return result
+
+    @app.delete("/api/runs/{run_id}")
+    async def delete_run(run_id: str):
+        try:
+            result = rollback_service.delete_run(run_id, confirm=True)
+        except RollbackError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        task = app.state.run_tasks.pop(run_id, None)
+        if task and not task.done():
+            task.cancel()
+        try:
+            await company.delete_thread(run_id)
+        except Exception:
+            pass
+        return result
+
     @app.get("/api/runs")
     async def list_runs(limit: int = 50):
         return {"runs": storage.list_runs(limit)}
@@ -803,6 +837,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "created_at": run.get("created_at"),
                     "mode": run.get("mode"),
                     "project_id": state.get("project_id") if isinstance(state, dict) else None,
+                    "has_code": bool(
+                        (state.get("implementation") or {}).get("code_edits")
+                        if isinstance(state, dict) else False
+                    ) or bool(storage.get_artifact(run["run_id"], "code_edit_result.json")),
                 }
             )
         for proposal in storage.list_evolutions(limit):
